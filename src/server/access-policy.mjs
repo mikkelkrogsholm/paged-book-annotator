@@ -60,7 +60,12 @@ export const ACCESS_PRESETS = Object.freeze({
 
 export const PERMISSIONS = Object.freeze([
   "books:read",
+  "books:upload",
+  "books:publish",
+  "books:settings",
   "annotations:read",
+  "annotations:read:self",
+  "annotations:read:all",
   "annotations:write",
   "annotations:moderate",
   "annotations:export",
@@ -82,18 +87,34 @@ export const ROLE_PERMISSIONS = Object.freeze({
   reviewer: Object.freeze([
     "books:read",
     "annotations:read",
+    "annotations:read:self",
     "annotations:write",
     "annotations:export",
     "progress:read:self",
   ]),
   reader: Object.freeze(["books:read", "progress:read:self"]),
+  editor: Object.freeze([
+    "books:read",
+    "annotations:read",
+    "annotations:read:all",
+    "annotations:write",
+    "annotations:moderate",
+    "annotations:export",
+    "progress:read:all",
+  ]),
+  publisher: Object.freeze([
+    "books:read",
+    "books:upload",
+    "books:publish",
+    "books:settings",
+  ]),
 });
 
 const ACCESS_VALUES = Object.freeze({
   reading: new Set(["public", "authenticated", "invited"]),
   annotationCreate: new Set(["disabled", "public", "authenticated", "invited"]),
   annotationView: new Set(["none", "own", "reviewGroup", "public"]),
-  registration: new Set(["disabled", "open", "inviteOnly"]),
+  registration: new Set(["disabled", "closed", "open", "inviteOnly", "code"]),
   progressTracking: new Set(["off", "resume", "analytics"]),
 });
 
@@ -122,13 +143,26 @@ export function permissionsForPrincipal(principal, bookId) {
   if (!principal) return new Set();
   if (principal.kind === "local") return new Set(ADMIN_PERMISSIONS);
   if (principal.kind === "token") {
+    if (principal.instanceAdmin === true) return new Set(ADMIN_PERMISSIONS);
+    if (Array.isArray(principal.bookGrants)) {
+      const grant = principal.bookGrants.find((candidate) => candidate.bookId === bookId);
+      return new Set(grant?.permissions ?? []);
+    }
     if (principal.bookId && principal.bookId !== bookId) return new Set();
     return new Set(principal.scopes ?? []);
   }
   if (principal.kind !== "user") return new Set();
   if (principal.globalRole === "instance_admin") return new Set(ADMIN_PERMISSIONS);
-  if (principal.bookId !== bookId) return new Set();
-  return new Set(ROLE_PERMISSIONS[principal.role] ?? []);
+  const membership = principal.memberships?.find((candidate) => candidate.bookId === bookId)
+    ?? (principal.bookId === bookId ? {
+      role: principal.role,
+      permissions: principal.permissions,
+    } : null);
+  if (!membership) return new Set();
+  return new Set([
+    ...(ROLE_PERMISSIONS[membership.role] ?? []),
+    ...(membership.permissions ?? []),
+  ]);
 }
 
 export function hasPermission(principal, permission, bookId) {
@@ -194,8 +228,10 @@ export function publicCapabilities(policy, principal, bookId) {
   };
 }
 
-export function validateScopes(scopes) {
-  if (!Array.isArray(scopes) || scopes.length === 0) throw new TypeError("Et token kræver mindst én permission.");
+export function validateScopes(scopes, { allowEmpty = false } = {}) {
+  if (!Array.isArray(scopes) || (!allowEmpty && scopes.length === 0)) {
+    throw new TypeError("Et token kræver mindst én permission.");
+  }
   const unique = [...new Set(scopes.map(String))];
   const invalid = unique.filter((scope) => !PERMISSIONS.includes(scope));
   if (invalid.length > 0) throw new TypeError(`Ukendte token-permissions: ${invalid.join(", ")}`);

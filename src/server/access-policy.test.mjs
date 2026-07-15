@@ -41,3 +41,35 @@ test("custom policies, token book boundaries and scope validation fail closed", 
   assert.throws(() => resolveAccessPolicy({ preset: "local", progressTracking: "always" }), /access.progressTracking/);
   assert.throws(() => validateScopes(["root"]), /Ukendte token-permissions/);
 });
+
+test("explicit per-book grants and instance-admin tokens do not bleed across books", () => {
+  const multiBookUser = {
+    kind: "user",
+    id: "user-2",
+    globalRole: "user",
+    memberships: [
+      { bookId: "book-a", role: "reader", permissions: ["annotations:write"] },
+      { bookId: "book-b", role: "publisher", permissions: [] },
+    ],
+  };
+  assert.deepEqual(
+    [...permissionsForPrincipal(multiBookUser, "book-a")].sort(),
+    ["annotations:write", "books:read", "progress:read:self"].sort(),
+  );
+  assert.equal(permissionsForPrincipal(multiBookUser, "book-b").has("books:publish"), true);
+  assert.deepEqual([...permissionsForPrincipal(multiBookUser, "book-c")], []);
+
+  const multiBookToken = {
+    kind: "token",
+    instanceAdmin: false,
+    bookGrants: [
+      { bookId: "book-a", permissions: ["books:read"] },
+      { bookId: "book-b", permissions: ["annotations:write"] },
+    ],
+  };
+  assert.deepEqual([...permissionsForPrincipal(multiBookToken, "book-a")], ["books:read"]);
+  assert.deepEqual([...permissionsForPrincipal(multiBookToken, "book-c")], []);
+  assert.equal(permissionsForPrincipal({ kind: "token", instanceAdmin: true }, "book-c").has("access:manage"), true);
+  assert.equal(resolveAccessPolicy({ preset: "publicRead", registration: "code" }).registration, "code");
+  assert.equal(resolveAccessPolicy({ preset: "publicRead", registration: "closed" }).registration, "closed");
+});
