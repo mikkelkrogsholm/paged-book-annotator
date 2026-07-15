@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 
-const minimumCoverage = 80;
+const minimumFunctions = 85;
+const minimumLines = 90;
 const processResult = Bun.spawn(["bun", "test", "src/server", "--coverage"], {
   cwd: fileURLToPath(new URL("..", import.meta.url)),
   env: process.env,
@@ -22,7 +23,7 @@ const aggregate = report.match(/^All files\s+\|\s+([0-9.]+)\s+\|\s+([0-9.]+)\s+\
 if (!aggregate) throw new Error("Buns samlede coverage-række kunne ikke læses.");
 const functions = Number(aggregate[1]);
 const lines = Number(aggregate[2]);
-if (functions < minimumCoverage || lines < minimumCoverage) {
-  throw new Error(`Server-coverage kræver ${minimumCoverage}% samlet; resultatet var ${functions}% functions og ${lines}% lines.`);
+if (functions < minimumFunctions || lines < minimumLines) {
+  throw new Error(`Server-coverage kræver ${minimumFunctions}% functions og ${minimumLines}% lines; resultatet var ${functions}% functions og ${lines}% lines.`);
 }
 console.log(`Server coverage gate passed: ${functions}% functions og ${lines}% lines.`);

@@ -61,7 +61,12 @@ test("Streamable HTTP MCP requires a token and exposes scoped book tools", async
       logRecords.filter((record) => record.event === "mcp.completed").map((record) => record.operation),
       ["tool:list_book_outline", "tool:search_book", "tool:create_annotation", "tool:list_annotations", "tool:list_users"],
     );
-    assert.equal(logRecords.some((record) => record.event === "mcp.failed" && record.operation === "tool:list_users"), true);
+    const mcpCompletions = logRecords.filter((record) => record.event === "mcp.completed");
+    assert.equal(mcpCompletions.every((record) => record.requestId && record.durationMs >= 0 && record.principalKind === "token"), true);
+    assert.deepEqual(mcpCompletions.map((record) => record.bookId), ["mcp-book", "mcp-book", "mcp-book", "mcp-book", null]);
+    const mcpFailure = logRecords.find((record) => record.event === "mcp.failed" && record.operation === "tool:list_users");
+    assert.equal(mcpFailure.status, "error");
+    assert.equal(mcpFailure.requestId, mcpCompletions.at(-1).requestId);
     assert.doesNotMatch(JSON.stringify(logRecords), new RegExp(`${token.secret}|Agentnote`));
   } finally {
     await client.close().catch(() => {});
@@ -73,6 +78,7 @@ test("Streamable HTTP MCP requires a token and exposes scoped book tools", async
 
 test("multi-book MCP validates explicit book context and keeps bundle bytes out of tool arguments", async () => {
   const calls = [];
+  const logRecords = [];
   const books = [
     { id: "book-a", title: "Bog A", status: "published", activeRevisionId: "rev-a1" },
     { id: "book-b", title: "Bog B", status: "draft", activeRevisionId: null },
@@ -99,7 +105,15 @@ test("multi-book MCP validates explicit book context and keeps bundle bytes out 
     archiveBook: async (_principal, bookId) => ({ id: bookId, status: "archived" }),
   };
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const mcp = createPagedBookMcpServer({ service, principal: { kind: "token", tokenId: "token-1" } });
+  let requestNumber = 0;
+  let monotonicTime = 0;
+  const mcp = createPagedBookMcpServer({
+    service,
+    principal: { kind: "token", tokenId: "token-1" },
+    logger: createOperationalLogger({ sink: (_line, record) => logRecords.push(record) }),
+    createRequestId: () => `mcp-request-${++requestNumber}`,
+    monotonicClock: () => ++monotonicTime,
+  });
   const client = new Client({ name: "multi-book-mcp-test", version: "1.0.0" }, { capabilities: {} });
 
   try {
@@ -137,6 +151,12 @@ test("multi-book MCP validates explicit book context and keeps bundle bytes out 
     assert.equal(resources.resources.some((resource) => resource.uri === "book://book-a/metadata"), true);
     const metadata = await client.readResource({ uri: "book://book-a/metadata" });
     assert.match(metadata.contents[0].text, /"title": "Bog A"/);
+    const completions = logRecords.filter((record) => record.event === "mcp.completed");
+    assert.equal(new Set(completions.map((record) => record.requestId)).size, completions.length);
+    assert.equal(completions.filter((record) => record.operation === "tool:create_book_upload").at(0).bookId, "book-b");
+    assert.equal(completions.filter((record) => record.operation === "tool:validate_book_upload").at(0).bookId, "book-b");
+    assert.equal(completions.filter((record) => record.operation === "tool:publish_book_revision").at(0).bookId, "book-b");
+    assert.equal(completions.filter((record) => record.operation === "resource:book-metadata").at(0).bookId, "book-a");
   } finally {
     await client.close().catch(() => {});
     await mcp.close().catch(() => {});

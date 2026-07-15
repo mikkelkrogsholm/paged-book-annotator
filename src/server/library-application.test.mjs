@@ -58,6 +58,11 @@ test("library application isolates book services, annotations and memberships", 
       expiresInHours: 24,
     });
     assert.equal((await collaboration.resolveServiceToken(adminToken.secret)).instanceAdmin, true);
+    assert.equal(library.revokeToken(local, multiBookToken.id), true);
+    const tokenAuditActions = collaboration.listAudit({ bookId: "book-a" })
+      .filter((event) => event.resourceType === "service_token")
+      .map((event) => event.action);
+    assert.deepEqual(new Set(tokenAuditActions), new Set(["token.create", "token.revoke"]));
 
     const user = await collaboration.createUser({
       email: "reader@example.test",

@@ -13,7 +13,7 @@
     "init": "bun scripts/pba-init.mjs",
     "test": "bun test",
     "test:server": "bun scripts/check-server-coverage.mjs",
-    "test:server:stability": "bun test src/server --randomize --seed=20260715",
+    "test:server:stability": "bun test src/server --randomize --seed=20260715 --rerun-each 3",
     "validate:example": "bun scripts/validate-book-document.mjs example/book/book.html && bun scripts/validate-navigation-document.mjs example/book/navigation.xhtml example/book/book.html",
     "validate:bundle": "bun scripts/validate-book-bundle.mjs",
     "check:version": "bun scripts/check-bun-version.mjs",

@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { test } from "bun:test";
 
 import { startBookViewer, stopBookViewer } from "../../server.mjs";
+import { createOperationalLogger } from "./operational-logger.mjs";
 
 function jsonRequest(method, body, cookie = "") {
   return {
@@ -47,7 +48,9 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
     annotations: [],
   }));
 
-  const running = await startBookViewer({ configPath });
+  const logRecords = [];
+  const logger = createOperationalLogger({ sink: (_line, record) => logRecords.push(record) });
+  const running = await startBookViewer({ configPath, logger });
   const base = running.server.url.origin;
   try {
     const initial = await responseJson(await fetch(`${base}/api/admin/books`));
@@ -110,6 +113,28 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
     await responseJson(await fetch(`${base}/api/books/second/account`, { method: "DELETE", headers: { Cookie: sessionCookie } }));
     const erasedAnnotations = await responseJson(await fetch(`${base}/api/admin/books/second/annotations`));
     assert.equal(erasedAnnotations.annotations[0].author.kind, "erased");
+
+    const audit = await responseJson(await fetch(`${base}/api/admin/books/second/audit`));
+    const actions = new Set(audit.events.map((event) => event.action));
+    for (const action of [
+      "book_revision.validate", "book_revision.publish", "access.update",
+      "access_code.create", "access_code.accept", "annotation.create",
+    ]) assert.equal(actions.has(action), true, `Manglende audit-event: ${action}`);
+    assert.equal(running.platform.collaboration.database.query(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE action = 'user.erase' AND book_id IS NULL",
+    ).get().count, 1);
+
+    const completions = logRecords.filter((record) => record.event === "request.completed");
+    assert.equal(new Set(completions.map((record) => record.requestId)).size, completions.length);
+    for (const path of [
+      "/api/admin/books/:bookId/uploads/:id/content",
+      "/api/admin/books/:bookId/uploads/:id/validate",
+      "/api/admin/books/:bookId/revisions/:id/publish",
+      "/api/books/:bookId/annotations",
+    ]) {
+      assert.equal(completions.some((record) => record.path === path && record.bookId === "second"), true, `Manglende logkontekst: ${path}`);
+    }
+    assert.doesNotMatch(JSON.stringify(logRecords), /admin@example\.test|reader@example\.test|Kun i anden bog|Prøvelæser/);
   } finally {
     await stopBookViewer(running.server);
     await rm(root, { recursive: true, force: true });

@@ -45,10 +45,21 @@ function itemsFrom(value, property = "items") {
   return [];
 }
 
+function operationBookId(arguments_) {
+  for (const argument of arguments_) {
+    if (argument && typeof argument === "object" && typeof argument.bookId === "string" && argument.bookId.trim()) {
+      return argument.bookId.trim();
+    }
+    if (argument instanceof URL && argument.protocol === "book:" && argument.hostname) return argument.hostname;
+  }
+  return null;
+}
+
 function instrumentMcpRegistrations(server, { logger, principal, createRequestId, monotonicClock }) {
   const wrap = (operation, handler) => async (...arguments_) => {
     const requestId = createRequestId();
     const startedAt = monotonicClock();
+    const bookId = operationBookId(arguments_);
     let status = "ok";
     try {
       return await handler(...arguments_);
@@ -57,6 +68,8 @@ function instrumentMcpRegistrations(server, { logger, principal, createRequestId
       logger.error("mcp.failed", {
         requestId,
         operation,
+        bookId,
+        status,
         principalKind: principal?.kind ?? "anonymous",
         errorName: error instanceof Error ? error.name : typeof error,
         errorCode: error?.code == null ? undefined : String(error.code),
@@ -66,6 +79,7 @@ function instrumentMcpRegistrations(server, { logger, principal, createRequestId
       logger.info("mcp.completed", {
         requestId,
         operation,
+        bookId,
         status,
         principalKind: principal?.kind ?? "anonymous",
         durationMs: Math.max(0, Number((monotonicClock() - startedAt).toFixed(3))),

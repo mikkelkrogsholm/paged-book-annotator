@@ -51,11 +51,18 @@ test("health and failures return correlated request IDs without logging request 
 
   const completions = records.filter((record) => record.event === "request.completed");
   assert.equal(completions.length, 2);
-  assert.deepEqual(completions.map(({ requestId, path, status, durationMs }) => ({ requestId, path, status, durationMs })), [
-    { requestId: "019f66a5-6866-7000-99c7-feecfdc94188", path: "/api/health", status: 200, durationMs: 2.5 },
-    { requestId: "generated-1", path: "/api/auth/login", status: 400, durationMs: 3.75 },
+  assert.deepEqual(completions.map(({ requestId, path, bookId, status, durationMs }) => ({ requestId, path, bookId, status, durationMs })), [
+    { requestId: "019f66a5-6866-7000-99c7-feecfdc94188", path: "/api/health", bookId: "observability-book", status: 200, durationMs: 2.5 },
+    { requestId: "generated-1", path: "/api/auth/login", bookId: "observability-book", status: 400, durationMs: 3.75 },
   ]);
-  assert.equal(records.filter((record) => record.event === "request.failed").length, 1);
+  const failure = records.find((record) => record.event === "request.failed");
+  assert.deepEqual({
+    requestId: failure.requestId, path: failure.path, bookId: failure.bookId,
+    principalKind: failure.principalKind, status: failure.status,
+  }, {
+    requestId: "generated-1", path: "/api/auth/login", bookId: "observability-book",
+    principalKind: "guest", status: 400,
+  });
   assert.doesNotMatch(JSON.stringify(records), /query-secret|query-password|header-secret|cookie-secret|body-secret/);
 });
 

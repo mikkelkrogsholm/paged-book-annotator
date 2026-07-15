@@ -171,11 +171,18 @@ function errorMetadata(error) {
 
 function normalizedRequestPath(pathname, config) {
   if (pathname.startsWith("/book/")) return "/book/*";
+  if (/^\/books\/[^/]+\/assets\//.test(pathname)) return "/books/:bookId/assets/*";
+  if (/^\/books\/[^/]+\/?$/.test(pathname)) return "/books/:bookId";
   if (pathname === config.mcp.endpoint) return config.mcp.endpoint;
   return pathname
+    .replace(/^\/api\/admin\/books\/[^/]+/, "/api/admin/books/:bookId")
+    .replace(/^\/api\/books\/[^/]+/, "/api/books/:bookId")
     .replace(/^\/api\/annotations\/[^/]+$/, "/api/annotations/:id")
     .replace(/^\/api\/admin\/users\/[^/]+\/password$/, "/api/admin/users/:id/password")
-    .replace(/^\/api\/admin\/(users|invitations|tokens)\/[^/]+$/, "/api/admin/$1/:id");
+    .replace(/^\/api\/admin\/(users|invitations|tokens)\/[^/]+$/, "/api/admin/$1/:id")
+    .replace(/\/(annotations|members|invitations|access-codes)\/[^/]+$/, "/$1/:id")
+    .replace(/\/uploads\/[^/]+\/(content|validate)$/, "/uploads/:id/$1")
+    .replace(/\/revisions\/[^/]+\/publish$/, "/revisions/:id/publish");
 }
 
 function principalKind(principal) {
@@ -470,6 +477,7 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
   let managedBookId = "";
   const managedApiMatch = platform && pathname.match(/^\/api\/books\/([^/]+)(\/.*)?$/);
   const managedReaderMatch = platform && pathname.match(/^\/books\/([^/]+)(?:\/|$)/);
+  const managedAdminMatch = platform && pathname.match(/^\/api\/admin\/books\/([^/]+)(?:\/|$)/);
   if (managedApiMatch) {
     managedBookId = platform.resolveBookId(managedApiMatch[1]);
     const book = platform.bookContext(managedBookId);
@@ -478,7 +486,10 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
     apiPathname = `/api${managedApiMatch[2] ?? ""}`;
     managed = true;
   }
-  const requestBookId = managedBookId || (managedReaderMatch ? platform.resolveBookId(managedReaderMatch[1]) : "");
+  const requestBookId = managedBookId
+    || (managedReaderMatch ? platform.resolveBookId(managedReaderMatch[1]) : "");
+  const administrativeBookId = managedAdminMatch ? platform.resolveBookId(managedAdminMatch[1]) : "";
+  state.bookId = requestBookId || administrativeBookId || (platform ? null : service?.bookId ?? config.book?.id ?? null);
   const context = await requestContext(request, platform ?? activeService, { bookId: requestBookId || platform?.defaultBookId });
   state.principalKind = principalKind(context.principal);
 
@@ -536,13 +547,20 @@ export async function handleBookViewerRequest(request, {
   const startedAt = monotonicClock();
   const id = requestId(request, createRequestId);
   const rawPath = new URL(request.url).pathname;
-  const state = { path: normalizedRequestPath(rawPath, config), principalKind: "anonymous" };
+  const state = {
+    path: normalizedRequestPath(rawPath, config),
+    bookId: platform ? null : service?.bookId ?? config.book?.id ?? null,
+    principalKind: "anonymous",
+  };
   let response;
   try {
     response = await routeBookViewerRequest(request, { config, service, platform, state, logger });
   } catch (error) {
     const status = error instanceof ApplicationError ? error.status : error instanceof TypeError || error instanceof SyntaxError || error instanceof RangeError ? 400 : 500;
-    logger.error("request.failed", { requestId: id, method: request.method, path: state.path, status, ...errorMetadata(error) });
+    logger.error("request.failed", {
+      requestId: id, method: request.method, path: state.path, bookId: state.bookId,
+      principalKind: state.principalKind, status, ...errorMetadata(error),
+    });
     const publicMessage = status === 500 ? "Intern serverfejl." : error instanceof Error ? error.message : String(error);
     response = jsonResponse(status, { error: publicMessage, code: error instanceof ApplicationError ? error.code : undefined });
   }
@@ -551,7 +569,7 @@ export async function handleBookViewerRequest(request, {
   response.headers.set("X-Frame-Options", "SAMEORIGIN");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   logger.info("request.completed", {
-    requestId: id, method: request.method, path: state.path, status: response.status,
+    requestId: id, method: request.method, path: state.path, bookId: state.bookId, status: response.status,
     durationMs: Math.max(0, Number((monotonicClock() - startedAt).toFixed(3))), principalKind: state.principalKind,
   });
   return response;

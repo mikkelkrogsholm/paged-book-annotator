@@ -127,7 +127,9 @@ bun run validate:bundle example/book
 ```
 
 Kontrollen bruger `Bun.Transpiler` til syntaks og Buns indbyggede test-runner.
-Serverens coverage-gate er 80 procent for lines og functions.
+Serverens coverage-gate er 85 procent for functions og 90 procent for lines.
+Stabilitetskommandoen randomiserer servertestene og kører hver test tre gange
+uden retry.
 Docker-buildet kører kontrollerne inde i det fastlåste runtime-image.
 
 ## Bun-version
