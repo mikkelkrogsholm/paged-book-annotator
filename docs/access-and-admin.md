@@ -39,6 +39,10 @@ Serveren validerer kombinationen ved opstart. Eksempel:
 og `analytics` gemmer seneste stabile anker og besøgte ankre, mens betegnelsen
 gør formålet eksplicit i konfigurationen.
 
+`registration` kan være `disabled`, `closed`, `open`, `inviteOnly` eller
+`code`. Invitationer er bundet til e-mail og bog; adgangskoder kan have udløb
+og maksimalt antal anvendelser. Begge tildeler en bogrolle ved accept.
+
 Konfigurationens profil er standarden ved første opstart. En administrator kan
 derefter ændre profilen i **Deling og adgang** i `/admin`; den validerede profil
 gemmes i samarbejdsdatabasen og bruges straks af reader, HTTP og MCP. UI'et viser
@@ -72,10 +76,16 @@ brugerpassword; begge handlinger lukker brugerens eksisterende sessioner.
 
 ## Roller og permissions
 
-Bogrollerne er `reader`, `reviewer` og `book_admin`. Service-tokens bruger
+Bogrollerne er `reader`, `reviewer`, `editor`, `publisher` og `book_admin`.
+`publisher` kan uploade og publicere revisioner uden brugeradministration;
+`editor` kan moderere annotationer. Service-tokens bruger
 finkornede scopes som `books:read`, `annotations:read`, `annotations:write`,
 `progress:read:all`, `users:invite`, `tokens:manage` og `audit:read`. En aktør
 kan aldrig delegere permissions, vedkommende ikke selv har.
+Admin UI'et kan give et token samme permissions i én eller flere valgte bøger.
+Et særskilt instansadministrator-token har alle rettigheder og kan blandt andet
+oprette brugere og bøger; kun lokal ejer eller en `instance_admin` kan udstede
+det.
 
 Offentlige annotationer uden login tilskrives en vedvarende pseudonym gæste-id.
 Brug `publicMemberReview` eller invitationsprofilerne, når en persons navn skal
@@ -86,6 +96,12 @@ engageret efter otte sekunder på opslaget. Et hop til sidste side er derfor ikk
 det samme som at have læst bogen. Færdigstatus kræver en eksplicit handling.
 Læseren kan slå tracking fra i kontodialogen; så slettes position og besøgte
 steder for den bog.
+
+Navn og e-mail er kontoens identitet. Telefon er valgfri og kræver et angivet
+formål. Kontodialogen kan eksportere brugerens konto-, medlemskabs-, progress-
+og annotationsdata. Ved sletning fjernes identitet, sessions, medlemskaber og
+progress, mens forfatterfeltet på eksisterende annotationer pseudonymiseres, så
+det redaktionelle spor ikke mister indhold.
 
 ## Offentlig deling
 

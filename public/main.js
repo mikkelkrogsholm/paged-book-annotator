@@ -6,8 +6,12 @@ import { NavigationController } from "./navigation/navigation-controller.js";
 import { BookReader } from "./reader/book-reader.js";
 import { ProgressClient } from "./reader/progress-client.js";
 
+const bookRoute = window.location.pathname.match(/^\/books\/([^/]+)\/?$/);
+const routeBookId = bookRoute ? decodeURIComponent(bookRoute[1]) : "";
+const apiBase = routeBookId ? `/api/books/${encodeURIComponent(routeBookId)}` : "/api";
+
 async function fetchConfig() {
-  const response = await fetch("/api/config", { headers: { Accept: "application/json" } });
+  const response = await fetch(`${apiBase}/config`, { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Kunne ikke hente viewer-konfigurationen (${response.status}).`);
   return response.json();
 }
@@ -33,7 +37,7 @@ try {
   const config = await fetchConfig();
   applyBookIdentity(config);
   const capabilities = config.session.capabilities;
-  new AuthController({ session: config.session, registration: capabilities.registration });
+  new AuthController({ session: config.session, registration: capabilities.registration, bookId: config.book.id });
 
   if (!capabilities.canRead) {
     document.querySelector("#accessGate").hidden = false;
@@ -63,7 +67,7 @@ try {
   });
   panel.panelButton.addEventListener("click", () => navigation.close());
   const annotations = new AnnotationController({
-    api: new AnnotationApi(),
+    api: new AnnotationApi({ baseUrl: `${apiBase}/annotations` }),
     panel,
     reader,
     bookId: config.book.id,
@@ -71,7 +75,7 @@ try {
     principal: config.session.principal,
   });
 
-  const progressClient = new ProgressClient();
+  const progressClient = new ProgressClient({ baseUrl: `${apiBase}/progress` });
   const progressEnabled = capabilities.progressTracking !== "off";
   const preference = progressEnabled ? await progressClient.getPreference() : { trackingEnabled: false };
   let trackingEnabled = preference.trackingEnabled;

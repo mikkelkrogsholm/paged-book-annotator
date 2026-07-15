@@ -233,6 +233,7 @@
       <button type="button" data-auth-view="login" aria-pressed="true">Log ind</button>
       <button type="button" data-auth-view="register" id="registerTab">Opret bruger</button>
       <button type="button" data-auth-view="invite">Invitation</button>
+      <button type="button" data-auth-view="code" id="codeTab" hidden>Adgangskode</button>
       <button type="button" data-auth-view="password" id="accountTab" hidden>Konto</button>
     </div>
     <form class="auth-form" id="loginForm" data-auth-form="login">
@@ -244,13 +245,26 @@
       <label>Navn<input name="displayName" autocomplete="name" required></label>
       <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
       <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>Telefon (valgfri)<input name="phone" type="tel" autocomplete="tel"></label>
+      <label>Formål med telefon (hvis angivet)<input name="phonePurpose" placeholder="Fx kontakt om prøvelæsning"></label>
       <button class="primary-button" type="submit">Opret og fortsæt</button>
     </form>
     <form class="auth-form" id="invitationForm" data-auth-form="invite" hidden>
       <label>Invitationskode<input name="secret" id="invitationSecret" autocomplete="off" required></label>
       <label>Navn<input name="displayName" autocomplete="name"></label>
       <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>Telefon (valgfri)<input name="phone" type="tel" autocomplete="tel"></label>
+      <label>Formål med telefon (hvis angivet)<input name="phonePurpose" placeholder="Fx kontakt om prøvelæsning"></label>
       <button class="primary-button" type="submit">Acceptér invitation</button>
+    </form>
+    <form class="auth-form" id="accessCodeForm" data-auth-form="code" hidden>
+      <label>Adgangskode<input name="accessCode" id="accessCodeSecret" autocomplete="off" required></label>
+      <label>Navn<input name="displayName" autocomplete="name" required></label>
+      <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
+      <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>Telefon (valgfri)<input name="phone" type="tel" autocomplete="tel"></label>
+      <label>Formål med telefon (hvis angivet)<input name="phonePurpose" placeholder="Fx kontakt om prøvelæsning"></label>
+      <button class="primary-button" type="submit">Opret adgang og fortsæt</button>
     </form>
     <form class="auth-form" id="passwordForm" data-auth-form="password" hidden>
       <label>Nuværende password<input name="currentPassword" type="password" autocomplete="current-password" required></label>
@@ -262,6 +276,8 @@
       <label class="tracking-preference"><input id="readingTrackingToggle" type="checkbox"> Gem min læsestatus</label>
       <small>Ved fravalg slettes din gemte position og dine registrerede læsesteder.</small>
       <button class="secondary-button" id="markCompleteButton" type="button">Markér bogen som læst</button>
+      <button class="secondary-button" id="exportAccountButton" type="button">Eksportér mine data</button>
+      <button class="secondary-button" id="eraseAccountButton" type="button">Slet mine data</button>
       <button class="secondary-button" type="submit">Log ud</button>
     </form>
     <p class="form-error" id="authError" role="alert" hidden></p>

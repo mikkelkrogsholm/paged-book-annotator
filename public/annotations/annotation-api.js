@@ -13,27 +13,31 @@ async function requestJson(url, options = {}) {
 }
 
 export class AnnotationApi {
+  constructor({ baseUrl = "/api/annotations" } = {}) {
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+  }
+
   list() {
-    return requestJson("/api/annotations");
+    return requestJson(this.baseUrl);
   }
 
   create(annotation) {
-    return requestJson("/api/annotations", { method: "POST", body: JSON.stringify(annotation) });
+    return requestJson(this.baseUrl, { method: "POST", body: JSON.stringify(annotation) });
   }
 
   update(id, changes) {
-    return requestJson(`/api/annotations/${encodeURIComponent(id)}`, {
+    return requestJson(`${this.baseUrl}/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(changes),
     });
   }
 
   delete(id) {
-    return requestJson(`/api/annotations/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return requestJson(`${this.baseUrl}/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   import(document, mode = "merge") {
-    return requestJson("/api/annotations/import", {
+    return requestJson(`${this.baseUrl}/import`, {
       method: "POST",
       body: JSON.stringify({ document, mode }),
     });

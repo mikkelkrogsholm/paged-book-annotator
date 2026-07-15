@@ -16,13 +16,14 @@ RUN bun run assets && bun run check && bun run validate:example && bun run valid
 FROM oven/bun:${BUN_VERSION}-alpine
 
 LABEL org.opencontainers.image.title="Paged Book Annotator"
-LABEL org.opencontainers.image.description="Self-contained local annotations for a bundled paged HTML book"
+LABEL org.opencontainers.image.description="Self-contained local multi-book review and annotation platform"
 
 WORKDIR /app
 
 COPY --from=viewer-builder --chown=bun:bun /app /app
 
-ENV BUN_ENV=production
+ENV BUN_ENV=production \
+    PBA_DATA_DIR=/data
 
 USER bun
 
@@ -32,4 +33,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
   CMD ["bun", "-e", "const response = await fetch('http://127.0.0.1:4173/api/health'); if (!response.ok) process.exit(1)"]
 
 ENTRYPOINT ["bun", "server.mjs"]
-CMD ["--config", "/book/book-viewer.json"]
+CMD ["--config", "/app/book-viewer.config.example.json", "--host", "0.0.0.0", "--port", "4173"]

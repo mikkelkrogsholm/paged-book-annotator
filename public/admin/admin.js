@@ -83,6 +83,7 @@ function renderBooks() {
     const revision = book.activeRevisionId ? `Aktiv revision ${book.activeRevisionId}` : "Intet publiceret bundle";
     return `<article class="book-card${active}" data-book-id="${escapeHtml(book.id)}"><span>${escapeHtml(book.status ?? "draft")}</span><h3>${escapeHtml(book.title ?? book.id)}</h3><p>${escapeHtml(book.subtitle ?? revision)}</p><small>${escapeHtml(revision)}</small><div class="row-actions"><button class="secondary" data-action="select-book">Administrér</button>${book.status === "archived" ? "" : '<button class="quiet-danger" data-action="archive-book">Arkivér</button>'}</div></article>`;
   }).join("") || '<p class="empty-library">Biblioteket er tomt. Opret den første bog ovenfor.</p>';
+  document.querySelector("#tokenBookGrid").innerHTML = state.books.filter((book) => book.status !== "archived").map((book) => `<label><input type="checkbox" name="tokenBook" value="${escapeHtml(book.id)}"${book.id === state.bookId ? " checked" : ""}>${escapeHtml(book.title ?? book.id)}</label>`).join("");
 }
 
 function renderAccess(policy) {
@@ -90,7 +91,7 @@ function renderAccess(policy) {
   document.querySelector("#accessPreset").textContent = presetLabels[resolved.preset] ?? resolved.preset ?? "Ikke konfigureret";
   document.querySelector("#accessSummary").textContent = `Læsning: ${resolved.reading ?? "—"} · annotation: ${resolved.annotationCreate ?? "—"} · tilmelding: ${resolved.enrollment ?? resolved.registration ?? "—"}`;
   document.querySelector("#accessProfile").value = resolved.preset ?? "privateReview";
-  document.querySelector("#enrollmentMode").value = resolved.enrollment ?? resolved.registration ?? "closed";
+  document.querySelector("#enrollmentMode").value = resolved.registration ?? "closed";
   document.querySelector("#capabilityPreview").innerHTML = Object.entries(capabilityLabels).map(([field, label]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(resolved[field] ?? "—")}</dd></div>`).join("");
   document.querySelector("#shareWarning").textContent = resolved.localBypass ? "Kun til lokal brug." : resolved.reading === "public" ? "Linket kan åbne bogen uden invitation." : "Linket kræver en bogspecifik adgang.";
 }
@@ -129,8 +130,9 @@ function renderAccessCodes(codes) {
 function renderTokens(tokens) {
   document.querySelector("#tokensTable").innerHTML = tokens.map((token) => {
     const revoke = token.revokedAt ? "" : `<button class="secondary" data-action="revoke-token" data-id="${escapeHtml(token.id)}">Tilbagekald</button>`;
-    const grants = token.bookIds?.join(", ") ?? token.grants?.map((grant) => grant.bookId).join(", ") ?? state.bookId;
-    return `<tr><td>${escapeHtml(token.name)}</td><td><code>${escapeHtml(token.prefix)}</code></td><td><small>${escapeHtml(grants)}</small>${list(token.scopes ?? [], "scopes").map(escapeHtml).join("<br>")}</td><td>${formatDate(token.expiresAt)}${token.revokedAt ? " · tilbagekaldt" : ""}</td><td>${revoke}</td></tr>`;
+    const bookGrants = token.bookGrants ?? token.grants ?? [];
+    const grants = token.instanceAdmin ? "Instansadministrator" : bookGrants.map((grant) => `${grant.bookId}: ${(grant.permissions ?? []).join(", ")}`).join(" · ") || state.bookId;
+    return `<tr><td>${escapeHtml(token.name)}</td><td><code>${escapeHtml(token.prefix)}</code></td><td><small>${escapeHtml(grants)}</small></td><td>${formatDate(token.expiresAt)}${token.revokedAt ? " · tilbagekaldt" : ""}</td><td>${revoke}</td></tr>`;
   }).join("") || emptyRow(5, "Der er ingen tokens med adgang til denne bog.");
 }
 
@@ -236,7 +238,7 @@ document.querySelector("#uploadForm").addEventListener("submit", async (event) =
     const revisions = await api(bookPath("revisions")); renderRevisions(list(revisions, "revisions")); event.currentTarget.reset();
   } catch (error) { status.textContent = error.message; toast(error.message); } finally { setTimeout(() => { progress.hidden = true; }, 1200); }
 });
-document.querySelector("#accessProfile").addEventListener("change", (event) => renderAccess({ preset: event.currentTarget.value, ...state.metadata.accessProfiles[event.currentTarget.value], enrollment: document.querySelector("#enrollmentMode").value }));
+document.querySelector("#accessProfile").addEventListener("change", (event) => renderAccess({ preset: event.currentTarget.value, ...state.metadata.accessProfiles[event.currentTarget.value], registration: document.querySelector("#enrollmentMode").value }));
 document.querySelector("#accessForm").addEventListener("submit", async (event) => {
   event.preventDefault(); const errorNode = document.querySelector("#accessError"); errorNode.hidden = true;
   try { const payload = await api(bookPath("access"), { method: "PUT", json: formObject(event.currentTarget) }); renderAccess(payload.access ?? payload); toast("Bogens adgang er gemt."); } catch (error) { errorNode.textContent = error.message; errorNode.hidden = false; }
@@ -256,7 +258,7 @@ document.querySelector("#accessCodeForm").addEventListener("submit", async (even
   try { const payload = await api(bookPath("access-codes"), { method: "POST", json: formObject(event.currentTarget) }); const code = payload.accessCode ?? payload.code ?? payload; state.accessCode = code.secret; const output = document.querySelector("#accessCodeOutput"); output.textContent = `Kopiér nu — koden vises ikke igen: ${code.secret}`; output.hidden = false; renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); } catch (error) { toast(error.message); }
 });
 document.querySelector("#tokenForm").addEventListener("submit", async (event) => {
-  event.preventDefault(); const input = { ...formObject(event.currentTarget), bookIds: [state.bookId], scopes: [...event.currentTarget.querySelectorAll("[name=scope]:checked")].map((node) => node.value) };
+  event.preventDefault(); const input = { ...formObject(event.currentTarget), bookIds: [...event.currentTarget.querySelectorAll("[name=tokenBook]:checked")].map((node) => node.value), scopes: [...event.currentTarget.querySelectorAll("[name=scope]:checked")].map((node) => node.value) };
   try { const payload = await api("/api/admin/tokens", { method: "POST", json: input }); const token = payload.token ?? payload; const output = document.querySelector("#tokenOutput"); output.textContent = `Kopiér nu — tokenet vises ikke igen: ${token.secret}`; output.hidden = false; renderTokens(list(await api(bookPath("tokens")), "tokens")); } catch (error) { toast(error.message); }
 });
 document.querySelector("#passwordForm").addEventListener("submit", async (event) => { event.preventDefault(); try { await api("/api/auth/password", { method: "POST", json: formObject(event.currentTarget) }); toast("Passwordet er ændret. Log ind igen."); setTimeout(() => location.assign("/"), 800); } catch (error) { toast(error.message); } });

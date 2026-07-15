@@ -12,9 +12,10 @@ at vise risiko, men er ikke autorisation. Alle grants håndhæves i servicen.
 
 ## Opret token
 
-Åbn `/admin`, vælg en bog, gå til **MCP-tokens**, markér permissions og kopiér
-hemmeligheden, når den vises. Databasen gemmer kun dens hash. Tokenet bindes til
-den valgte bog; instansrettigheder gives særskilt.
+Åbn `/admin`, vælg **MCP-tokens**, markér en eller flere bøger og permissions,
+og kopiér hemmeligheden, når den vises. Databasen gemmer kun dens hash. Et
+instansadministrator-token oprettes med det særskilte valg og kan administrere
+alle bøger, brugere og grants; kun en instansadministrator kan udstede det.
 
 ## Stdio og Streamable HTTP
 

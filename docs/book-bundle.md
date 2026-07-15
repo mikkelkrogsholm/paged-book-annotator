@@ -1,7 +1,10 @@
 # Book bundle-kontrakten
 
-Book Viewer-imaget er generisk og indeholder aldrig en konkret bog. Det
-oprindelige single-book setup forventer to mounts:
+Book Viewer-imaget er generisk. Det administrerede setup bruger ét vedvarende
+`/data`-mount. Bøger uploades via admin UI eller MCP og installeres under
+`/data/library`. Det tidligere single-book setup med `/book` og `/data` kan
+stadig importeres ved første start gennem installationskonfigurationens
+`book.sourceDir`.
 
 ```text
 /book  read-only  færdigt bog-bundle
@@ -16,19 +19,18 @@ det dokument, manifestets `book.document` peger på. Hvis manifestet angiver
 skrifter og pagineringskode skal kunne indlæses fra bundle-mappen uden
 netadgang eller adgang til værtens filsystem.
 
-Manifestet bruger containerens stabile mountpunkter:
+Bundlemanifestet beskriver kun bogens indhold og må ikke styre server eller
+storage:
 
 ```json
 {
-  "server": { "host": "0.0.0.0", "port": 4173 },
+  "schemaVersion": 1,
   "book": {
     "id": "my-book",
     "title": "Min bog",
-    "sourceDir": "/book",
     "document": "book.html",
     "navigation": "navigation.xhtml"
-  },
-  "annotations": { "file": "/data/my-book.annotations.json" }
+  }
 }
 ```
 
@@ -43,8 +45,8 @@ Bundlevalideringen kontrollerer navigationshierarkiet, alle lokale referencer
 og at hvert navigationslink peger på et stabilt mål i bogdokumentet. Den afviser
 også links, specialfiler og aktivt indhold.
 
-I et administreret multi-book setup importeres denne mappe eller uploades som
-et `.tar.gz`-arkiv. `book.sourceDir`, `annotations`, `collaboration`, `server` og
-andre procesfelter bruges ikke som en del af det normaliserede indholdsmanifest;
-storage og runtime-konfiguration ejes af installationen. Se
+Mappen pakkes som et `.tar.gz`-arkiv med manifestet i arkivets rod.
+`book.sourceDir`, `annotations`, `collaboration`, `server` og andre procesfelter
+ignoreres ved import af ældre bundles; storage og runtime-konfiguration ejes af
+installationen. Se
 [`managed-book-catalog.md`](managed-book-catalog.md).

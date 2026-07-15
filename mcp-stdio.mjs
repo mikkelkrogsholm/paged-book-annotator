@@ -4,10 +4,11 @@ import { resolve } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { loadBookViewerConfig } from "./server.mjs";
-import { AnnotationRepository } from "./src/server/annotation-repository.mjs";
-import { BookCollaboration } from "./src/server/application-service.mjs";
-import { BookContentIndex } from "./src/server/book-content-index.mjs";
+import { BookCatalogRepository } from "./src/server/book-catalog-repository.mjs";
+import { LocalBookStorage } from "./src/server/book-storage.mjs";
 import { CollaborationRepository } from "./src/server/collaboration-repository.mjs";
+import { LibraryApplication } from "./src/server/library-application.mjs";
+import { ManagedBookCatalog } from "./src/server/managed-book-catalog.mjs";
 import { createPagedBookMcpServer } from "./src/server/mcp-server.mjs";
 import { createOperationalLogger } from "./src/server/operational-logger.mjs";
 
@@ -19,16 +20,31 @@ function configArgument(argv) {
 const config = await loadBookViewerConfig(resolve(configArgument(Bun.argv.slice(2))));
 const logger = createOperationalLogger({
   ...config.logging,
-  baseFields: { component: "mcp-stdio", bookId: config.book.id },
+  baseFields: { component: "mcp-stdio", bookId: config.book?.id ?? "library" },
   sink: (line) => process.stderr.write(`${line}\n`),
 });
+const catalogRepository = new BookCatalogRepository({ filePath: config.library.catalogDatabase });
+const storage = new LocalBookStorage({ rootDir: config.library.dataDir, limits: { maxArchiveBytes: config.library.uploadMaxBytes } });
+const catalog = new ManagedBookCatalog({ repository: catalogRepository, storage });
+if (catalog.listBooks({ includeArchived: true }).length === 0 && config.book) {
+  await catalog.importBookDirectory({
+    sourceDir: config.book.sourceDir,
+    book: {
+      id: config.book.id,
+      slug: config.book.id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+      title: config.book.title,
+      subtitle: config.book.subtitle,
+      language: config.book.language,
+    },
+    createdBy: "legacy-bootstrap",
+    publish: true,
+  });
+}
 const collaboration = new CollaborationRepository({
-  filePath: config.collaboration.database, bookId: config.book.id,
+  filePath: config.collaboration.database,
   sessionHours: config.auth.sessionHours, invitationHours: config.auth.invitationHours,
 });
-const annotations = new AnnotationRepository({ filePath: config.annotations.file, bookId: config.book.id });
-const bookContentIndex = new BookContentIndex({ filePath: resolve(config.book.sourceDir, config.book.document), bookId: config.book.id, buildId: config.book.buildId });
-const service = new BookCollaboration({ config, annotationRepository: annotations, collaborationRepository: collaboration, bookContentIndex });
+const service = new LibraryApplication({ config, catalog, collaborationRepository: collaboration });
 const token = process.env.PBA_MCP_TOKEN;
 if (!token) throw new Error("Sæt PBA_MCP_TOKEN til et service-token oprettet i admin UI.");
 const principal = await service.resolvePrincipal({ bearerToken: token });
@@ -44,6 +60,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     logger.info("mcp.stopping", { reason: signal.toLowerCase() });
     await server.close();
     collaboration.close();
+    catalogRepository.close();
     logger.info("mcp.stopped", { reason: signal.toLowerCase() });
   });
 }

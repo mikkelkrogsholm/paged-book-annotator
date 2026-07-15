@@ -87,7 +87,11 @@ export class BookCollaboration {
   }
 
   get policy() {
-    return this.collaboration.getAccessPolicy(this.config.access);
+    return this.collaboration.getAccessPolicy(this.config.access, this.bookId);
+  }
+
+  audit(input) {
+    return this.collaboration.audit({ ...input, bookId: this.bookId });
   }
 
   async resolvePrincipal({ sessionSecret = "", bearerToken = "", guestId = "" } = {}) {
@@ -100,7 +104,7 @@ export class BookCollaboration {
       return { kind: "local", id: "local-owner", displayName: "Lokal ejer", bookId: this.bookId };
     }
     if (sessionSecret) {
-      const user = await this.collaboration.resolveSession(sessionSecret);
+      const user = await this.collaboration.resolveSession(sessionSecret, this.bookId);
       if (user) return user;
     }
     return guestId ? { kind: "guest", id: guestId, displayName: "Gæstelæser", bookId: this.bookId } : null;
@@ -173,40 +177,42 @@ export class BookCollaboration {
   }
 
   async login({ email, password }) {
-    const principal = await this.collaboration.authenticate(email, password);
+    const principal = await this.collaboration.authenticate(email, password, this.bookId);
     if (!principal) throw new ApplicationError(401, "E-mail eller password er forkert.", "invalid_credentials");
     const session = await this.collaboration.createSession(principal.id);
-    this.collaboration.audit({ principal, action: "session.login", resourceType: "session" });
-    return { ...session, principal: this.collaboration.principalForUser(principal.id) };
+    this.audit({ principal, action: "session.login", resourceType: "session" });
+    return { ...session, principal: this.collaboration.principalForUser(principal.id, this.bookId) };
   }
 
   async logout(sessionSecret, principal) {
     const revoked = await this.collaboration.revokeSession(sessionSecret);
-    if (revoked) this.collaboration.audit({ principal, action: "session.logout", resourceType: "session" });
+    if (revoked) this.audit({ principal, action: "session.logout", resourceType: "session" });
     return revoked;
   }
 
   async changeOwnPassword(principal, input) {
     if (principal?.kind !== "user") deny("Log ind som bruger for at ændre password.");
     const user = await this.collaboration.changePassword(principal.id, input);
-    this.collaboration.audit({ principal, action: "user.password.change", resourceType: "user", resourceId: principal.id });
+    this.audit({ principal, action: "user.password.change", resourceType: "user", resourceId: principal.id });
     return user;
   }
 
   async register(input) {
     if (this.policy.registration !== "open") deny("Selvregistrering er ikke åben.");
-    const user = await this.collaboration.createUser({ ...input, bookRole: "reviewer" });
-    const principal = this.collaboration.principalForUser(user.id);
+    const user = await this.collaboration.createUser({ ...input, bookId: this.bookId, bookRole: "reviewer" });
+    if (input.phone) this.collaboration.saveReviewerProfile(user.id, { bookId: this.bookId, phone: input.phone, phonePurpose: input.phonePurpose });
+    const principal = this.collaboration.principalForUser(user.id, this.bookId);
     const session = await this.collaboration.createSession(user.id);
-    this.collaboration.audit({ principal, action: "user.register", resourceType: "user", resourceId: user.id });
+    this.audit({ principal, action: "user.register", resourceType: "user", resourceId: user.id });
     return { ...session, principal };
   }
 
   async acceptInvitation(input) {
-    const user = await this.collaboration.acceptInvitation(input);
-    const principal = this.collaboration.principalForUser(user.id);
+    const user = await this.collaboration.acceptInvitation({ ...input, bookId: this.bookId });
+    if (input.phone) this.collaboration.saveReviewerProfile(user.id, { bookId: this.bookId, phone: input.phone, phonePurpose: input.phonePurpose });
+    const principal = this.collaboration.principalForUser(user.id, this.bookId);
     const session = await this.collaboration.createSession(user.id);
-    this.collaboration.audit({ principal, action: "invitation.accept", resourceType: "user", resourceId: user.id });
+    this.audit({ principal, action: "invitation.accept", resourceType: "user", resourceId: user.id });
     return { ...session, principal };
   }
 
@@ -223,7 +229,7 @@ export class BookCollaboration {
     this.assertCanRead(principal);
     if (!canCreateAnnotation(this.policy, principal, this.bookId)) deny("Log ind med annotationsadgang for at oprette en note.");
     const annotation = await this.annotations.create(input, { principal });
-    this.collaboration.audit({ principal, action: "annotation.create", resourceType: "annotation", resourceId: annotation.id });
+    this.audit({ principal, action: "annotation.create", resourceType: "annotation", resourceId: annotation.id });
     return annotation;
   }
 
@@ -234,7 +240,7 @@ export class BookCollaboration {
     if (!owns && !hasPermission(principal, "annotations:moderate", this.bookId)) deny();
     if (!canCreateAnnotation(this.policy, principal, this.bookId) && !hasPermission(principal, "annotations:moderate", this.bookId)) deny();
     const annotation = await this.annotations.update(id, input, { principal });
-    this.collaboration.audit({ principal, action: "annotation.update", resourceType: "annotation", resourceId: id });
+    this.audit({ principal, action: "annotation.update", resourceType: "annotation", resourceId: id });
     return annotation;
   }
 
@@ -243,14 +249,14 @@ export class BookCollaboration {
     if (!current) return false;
     if (current.author.id !== actorId(principal) && !hasPermission(principal, "annotations:moderate", this.bookId)) deny();
     const deleted = await this.annotations.delete(id);
-    if (deleted) this.collaboration.audit({ principal, action: "annotation.delete", resourceType: "annotation", resourceId: id });
+    if (deleted) this.audit({ principal, action: "annotation.delete", resourceType: "annotation", resourceId: id });
     return deleted;
   }
 
   async importAnnotations(principal, document, mode) {
     this.assertPermission(principal, "annotations:moderate");
     const result = await this.annotations.importDocument(document, mode);
-    this.collaboration.audit({ principal, action: "annotation.import", resourceType: "annotation_document", details: { mode, count: result.annotations.length } });
+    this.audit({ principal, action: "annotation.import", resourceType: "annotation_document", details: { mode, count: result.annotations.length } });
     return result;
   }
 
@@ -269,41 +275,41 @@ export class BookCollaboration {
     if (this.policy.progressTracking === "off") return null;
     const id = actorId(principal);
     if (!id) deny("Læseprogression kræver en stabil læseridentitet.");
-    const progress = this.collaboration.saveProgress(id, input);
+    const progress = this.collaboration.saveProgress(id, input, this.bookId);
     if (!progress) return null;
-    this.collaboration.audit({ principal, action: "progress.update", resourceType: "reading_progress", resourceId: id, details: { anchorId: progress.anchorId, percent: progress.percent } });
+    this.audit({ principal, action: "progress.update", resourceType: "reading_progress", resourceId: id, details: { anchorId: progress.anchorId, percent: progress.percent } });
     return progress;
   }
 
   getProgress(principal) {
     const id = actorId(principal);
     if (!id || this.policy.progressTracking === "off") return null;
-    return this.collaboration.getProgress(id);
+    return this.collaboration.getProgress(id, this.bookId);
   }
 
   getProgressPreference(principal) {
     const id = actorId(principal);
     if (!id || this.policy.progressTracking === "off") return { trackingEnabled: false, updatedAt: null };
-    return this.collaboration.readingPreference(id);
+    return this.collaboration.readingPreference(id, this.bookId);
   }
 
   setProgressPreference(principal, trackingEnabled) {
     this.assertCanRead(principal);
     const id = actorId(principal);
     if (!id) deny("Privatlivsindstillinger kræver en stabil læseridentitet.");
-    const preference = this.collaboration.setReadingPreference(id, trackingEnabled);
-    this.collaboration.audit({ principal, action: "progress.preference.update", resourceType: "reading_preference", resourceId: id, details: preference });
+    const preference = this.collaboration.setReadingPreference(id, trackingEnabled, this.bookId);
+    this.audit({ principal, action: "progress.preference.update", resourceType: "reading_preference", resourceId: id, details: preference });
     return preference;
   }
 
   listAllProgress(principal) {
     this.assertPermission(principal, "progress:read:all");
-    return this.collaboration.listProgress();
+    return this.collaboration.listProgress(this.bookId);
   }
 
   listUsers(principal) {
     this.assertPermission(principal, "users:read");
-    return this.collaboration.listUsers();
+    return this.collaboration.listUsers(this.bookId);
   }
 
   accessSettings(principal) {
@@ -317,15 +323,16 @@ export class BookCollaboration {
     if (this.policy.localBypass && !nextPolicy.localBypass && this.collaboration.activeAdministratorCount() === 0) {
       throw new ApplicationError(409, "Opret mindst én aktiv administrator, før lokal ejeradgang slås fra.", "administrator_required");
     }
-    const policy = this.collaboration.saveAccessPolicy(nextPolicy, actorId(principal));
-    this.collaboration.audit({ principal, action: "access.update", resourceType: "book_settings", resourceId: this.bookId, details: policy });
+    const policy = this.collaboration.saveAccessPolicy(nextPolicy, actorId(principal), this.bookId);
+    this.audit({ principal, action: "access.update", resourceType: "book_settings", resourceId: this.bookId, details: policy });
     return policy;
   }
 
   async createUser(principal, input) {
     this.assertPermission(principal, "users:invite");
-    const user = await this.collaboration.createUser(input);
-    this.collaboration.audit({ principal, action: "user.create", resourceType: "user", resourceId: user.id });
+    const user = await this.collaboration.createUser({ ...input, bookId: input.bookId ?? this.bookId });
+    if (input.phone) this.collaboration.saveReviewerProfile(user.id, { bookId: input.bookId ?? this.bookId, phone: input.phone, phonePurpose: input.phonePurpose });
+    this.audit({ principal, action: "user.create", resourceType: "user", resourceId: user.id });
     return user;
   }
 
@@ -333,63 +340,117 @@ export class BookCollaboration {
     this.assertPermission(principal, "access:manage");
     if (input.globalRole) this.collaboration.setGlobalRole(userId, input.globalRole);
     if (input.status) this.collaboration.setUserStatus(userId, input.status);
-    if (input.bookRole === null) this.collaboration.removeMembership(userId);
-    else if (input.bookRole) this.collaboration.setMembership(userId, input.bookRole);
-    const user = this.collaboration.getUser(userId);
-    this.collaboration.audit({ principal, action: "user.update", resourceType: "user", resourceId: userId, details: input });
+    if (input.bookRole === null) this.collaboration.removeMembership(userId, this.bookId);
+    else if (input.bookRole) this.collaboration.setMembership(userId, input.bookRole, { bookId: this.bookId, permissions: input.permissions });
+    if (input.phone !== undefined || input.phonePurpose !== undefined) {
+      this.collaboration.saveReviewerProfile(userId, { bookId: this.bookId, phone: input.phone, phonePurpose: input.phonePurpose });
+    }
+    const user = this.collaboration.getUser(userId, this.bookId);
+    this.audit({ principal, action: "user.update", resourceType: "user", resourceId: userId, details: { globalRole: input.globalRole, status: input.status, bookRole: input.bookRole, permissions: input.permissions } });
     return user;
   }
 
   async resetUserPassword(principal, userId, newPassword) {
     this.assertPermission(principal, "access:manage");
     const user = await this.collaboration.changePassword(userId, { newPassword, requireCurrent: false });
-    this.collaboration.audit({ principal, action: "user.password.reset", resourceType: "user", resourceId: userId });
+    this.audit({ principal, action: "user.password.reset", resourceType: "user", resourceId: userId });
     return user;
   }
 
   async createInvitation(principal, input) {
     this.assertPermission(principal, "users:invite");
-    const invitation = await this.collaboration.createInvitation({ ...input, createdBy: actorId(principal) });
-    this.collaboration.audit({ principal, action: "invitation.create", resourceType: "invitation", resourceId: invitation.id, details: { email: invitation.email, role: invitation.role } });
+    const invitation = await this.collaboration.createInvitation({ ...input, bookId: this.bookId, createdBy: actorId(principal) });
+    this.audit({ principal, action: "invitation.create", resourceType: "invitation", resourceId: invitation.id, details: { role: invitation.role } });
     return invitation;
   }
 
   listInvitations(principal) {
     this.assertPermission(principal, "users:read");
-    return this.collaboration.listInvitations();
+    return this.collaboration.listInvitations(this.bookId);
   }
 
   revokeInvitation(principal, id) {
     this.assertPermission(principal, "users:invite");
-    const revoked = this.collaboration.revokeInvitation(id);
-    if (revoked) this.collaboration.audit({ principal, action: "invitation.revoke", resourceType: "invitation", resourceId: id });
+    const revoked = this.collaboration.revokeInvitation(id, this.bookId);
+    if (revoked) this.audit({ principal, action: "invitation.revoke", resourceType: "invitation", resourceId: id });
     return revoked;
   }
 
   async createToken(principal, input) {
     this.assertPermission(principal, "tokens:manage");
-    const scopes = validateScopes(input.scopes);
-    const delegable = permissionsForPrincipal(principal, this.bookId);
-    if (scopes.some((scope) => !delegable.has(scope))) deny("Et token kan ikke få rettigheder, som opretteren ikke selv har.");
-    const token = await this.collaboration.createServiceToken({ ...input, scopes, createdBy: actorId(principal) });
-    this.collaboration.audit({ principal, action: "token.create", resourceType: "service_token", resourceId: token.id, details: { name: token.name, scopes } });
+    const grants = (input.grants ?? [{ bookId: this.bookId, permissions: input.scopes }]).map((grant) => ({
+      bookId: grant.bookId,
+      permissions: validateScopes(grant.permissions),
+    }));
+    for (const grant of grants) {
+      const delegable = permissionsForPrincipal(principal, grant.bookId);
+      if (grant.permissions.some((permission) => !delegable.has(permission))) {
+        deny("Et token kan ikke få rettigheder, som opretteren ikke selv har.");
+      }
+    }
+    if (input.instanceAdmin && principal?.kind !== "local" && principal?.globalRole !== "instance_admin" && principal?.instanceAdmin !== true) deny();
+    const token = await this.collaboration.createServiceToken({ ...input, scopes: undefined, grants, createdBy: actorId(principal) });
+    this.audit({ principal, action: "token.create", resourceType: "service_token", resourceId: token.id, details: { name: token.name, grants, instanceAdmin: token.instanceAdmin } });
     return token;
   }
 
   listTokens(principal) {
     this.assertPermission(principal, "tokens:manage");
-    return this.collaboration.listServiceTokens();
+    return this.collaboration.listServiceTokens(this.bookId);
   }
 
   revokeToken(principal, id) {
     this.assertPermission(principal, "tokens:manage");
-    const revoked = this.collaboration.revokeServiceToken(id);
-    if (revoked) this.collaboration.audit({ principal, action: "token.revoke", resourceType: "service_token", resourceId: id });
+    const revoked = this.collaboration.revokeServiceToken(id, this.bookId);
+    if (revoked) this.audit({ principal, action: "token.revoke", resourceType: "service_token", resourceId: id });
     return revoked;
   }
 
   listAudit(principal, options) {
     this.assertPermission(principal, "audit:read");
-    return this.collaboration.listAudit(options);
+    return this.collaboration.listAudit({ ...options, bookId: this.bookId });
+  }
+
+  async createAccessCode(principal, input) {
+    this.assertPermission(principal, "users:invite");
+    const accessCode = await this.collaboration.createAccessCode({ ...input, bookId: this.bookId, createdBy: actorId(principal) });
+    this.audit({ principal, action: "access_code.create", resourceType: "access_code", resourceId: accessCode.id, details: { role: accessCode.role, maxUses: accessCode.maxUses } });
+    return accessCode;
+  }
+
+  listAccessCodes(principal) {
+    this.assertPermission(principal, "users:read");
+    return this.collaboration.listAccessCodes(this.bookId);
+  }
+
+  revokeAccessCode(principal, id) {
+    this.assertPermission(principal, "users:invite");
+    const revoked = this.collaboration.revokeAccessCode(id, this.bookId);
+    if (revoked) this.audit({ principal, action: "access_code.revoke", resourceType: "access_code", resourceId: id });
+    return revoked;
+  }
+
+  reviewerProfile(principal, userId = actorId(principal)) {
+    if (userId !== actorId(principal)) this.assertPermission(principal, "users:read");
+    return this.collaboration.getReviewerProfile(userId, this.bookId);
+  }
+
+  saveReviewerProfile(principal, userId, input) {
+    if (userId !== actorId(principal)) this.assertPermission(principal, "access:manage");
+    return this.collaboration.saveReviewerProfile(userId, { ...input, bookId: this.bookId });
+  }
+
+  async exportUserData(principal, userId = actorId(principal)) {
+    if (userId !== actorId(principal)) this.assertPermission(principal, "users:read");
+    const account = this.collaboration.exportUserData(userId);
+    const annotations = (await this.annotations.list()).annotations.filter((annotation) => annotation.author.id === userId);
+    return { ...account, annotations };
+  }
+
+  async eraseUserData(principal, userId = actorId(principal)) {
+    if (userId !== actorId(principal)) this.assertPermission(principal, "access:manage");
+    this.audit({ principal, action: "user.erase", resourceType: "user", resourceId: userId });
+    await this.annotations.anonymizeAuthor(userId);
+    return this.collaboration.eraseUserData(userId);
   }
 }

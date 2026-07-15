@@ -1,33 +1,11 @@
 {
-  "server": {
-    "host": "0.0.0.0",
-    "port": 4173
-  },
   "book": {
     "id": "annotator-example",
     "title": "Eksempelbog",
     "subtitle": "Bundlet med Book Viewer",
     "mark": "E",
     "language": "da",
-    "sourceDir": "/book",
     "document": "book.html",
     "navigation": "navigation.xhtml"
-  },
-  "access": {
-    "preset": "local"
-  },
-  "annotations": {
-    "file": "/data/example-book-annotations.json"
-  },
-  "collaboration": {
-    "database": "/data/example-book-collaboration.sqlite"
-  },
-  "logging": {
-    "level": "info",
-    "format": "json"
-  },
-  "mcp": {
-    "enabled": true,
-    "endpoint": "/mcp"
   }
 }

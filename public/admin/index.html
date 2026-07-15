@@ -54,7 +54,7 @@
           <div class="sharing-layout">
             <form class="settings-form" id="accessForm">
               <label for="accessProfile">Adgangsprofil</label><select id="accessProfile" name="preset" required></select>
-              <label for="enrollmentMode">Tilmelding</label><select id="enrollmentMode" name="enrollment"><option value="closed">Lukket</option><option value="invite">Kun invitation</option><option value="code">Adgangskode</option><option value="open">Åben tilmelding</option></select>
+              <label for="enrollmentMode">Tilmelding</label><select id="enrollmentMode" name="registration"><option value="closed">Lukket</option><option value="inviteOnly">Kun invitation</option><option value="code">Adgangskode</option><option value="open">Åben tilmelding</option><option value="disabled">Ingen kontooprettelse</option></select>
               <p class="field-help">Ændringen træder i kraft med det samme for den valgte bog.</p>
               <dl class="capability-preview" id="capabilityPreview"></dl><p class="form-error" id="accessError" role="alert" hidden></p><button type="submit">Gem bogens adgang</button>
             </form>
@@ -95,7 +95,7 @@
         <section id="progress"><div class="section-heading"><div><span>Stabile ankre og sidehints</span><h2>Læseprogression</h2></div><p>Kun den seneste position og samtykkebaserede læsehændelser vises.</p></div><div class="table-wrap"><table><thead><tr><th>Læser</th><th>Position</th><th>Fremdrift</th><th>Læste steder</th><th>Senest</th></tr></thead><tbody id="progressTable"></tbody></table></div></section>
 
         <section id="tokens"><div class="section-heading"><div><span>Agent- og MCP-adgang</span><h2>Service-tokens</h2></div><p>Tokenet begrænses til den valgte bog. Instansgrants kræver særskilt administratorpermission.</p></div>
-          <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" required><button type="submit">Opret token</button></div><fieldset><legend>Rettigheder i aktiv bog</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
+          <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" required><label><input name="instanceAdmin" type="checkbox" value="true"> Instansadministrator</label><button type="submit">Opret token</button></div><fieldset><legend>Bøger (samme permissions anvendes på de valgte bøger)</legend><div class="scope-grid" id="tokenBookGrid"></div></fieldset><fieldset><legend>Permissions</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
           <output class="secret-output" id="tokenOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Prefix</th><th>Bøger og rettigheder</th><th>Udløber</th><th></th></tr></thead><tbody id="tokensTable"></tbody></table></div>
         </section>
 

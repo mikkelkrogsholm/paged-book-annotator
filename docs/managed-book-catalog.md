@@ -50,7 +50,6 @@ Absolutte stier, traversal, duplikater, links, specialfiler og aktive filer som
 JavaScript, WebAssembly og eksekverbare biblioteker afvises. Markup, SVG og CSS
 kontrolleres desuden for scripts, event handlers og andre aktive konstruktioner.
 
-Implementationen er designet mod repository-pinnen Bun 1.3.14 og er desuden
-afprøvet med udviklingsmaskinens Bun 1.3.8. Den bruger `bun:sqlite`,
+Implementationen er verificeret mod repository-pinnen Bun 1.3.14. Den bruger `bun:sqlite`,
 `Bun.Archive`, `Bun.gzipSync`/`Bun.gunzipSync` og standardbibliotekets
 filesystem-API'er; den tilføjer ingen runtime-afhængigheder.

@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdir, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export const ANNOTATION_SCHEMA_VERSION = 3;
+export const ANNOTATION_SCHEMA_VERSION = 4;
 export const ANNOTATION_TYPES = Object.freeze(["text", "element", "page"]);
 export const ANNOTATION_STATUSES = Object.freeze(["open", "resolved", "accepted", "rejected"]);
 export const ANNOTATION_CATEGORIES = Object.freeze(["general", "language", "structure", "fact", "design"]);
@@ -140,6 +141,11 @@ function actorFromPrincipal(principal) {
   });
 }
 
+function erasedActor(userId) {
+  const reference = createHash("sha256").update(String(userId)).digest("hex").slice(0, 16);
+  return { id: `erased-${reference}`, displayName: "Slettet bruger", kind: "erased" };
+}
+
 export function validateStoredAnnotation(input, expectedBookId) {
   const draft = validateAnnotationDraft(input);
   const bookId = requireString(input.bookId, "bookId");
@@ -150,6 +156,7 @@ export function validateStoredAnnotation(input, expectedBookId) {
   return {
     id: requireString(input.id, "id"),
     bookId,
+    revisionId: requireString(input.revisionId, "revisionId"),
     ...draft,
     author: validateActor(input.author),
     updatedBy: validateActor(input.updatedBy ?? input.author, "updatedBy"),
@@ -163,7 +170,7 @@ export function migrateAnnotationDocument(input, expectedBookId) {
     throw new TypeError("Annotationsfilen matcher ikke den konfigurerede bog.");
   }
   if (input.schemaVersion === ANNOTATION_SCHEMA_VERSION) return input;
-  if (![1, 2].includes(input.schemaVersion)) {
+  if (![1, 2, 3].includes(input.schemaVersion)) {
     throw new TypeError(`Annotationsfilen bruger schema ${input.schemaVersion}; forventede ${ANNOTATION_SCHEMA_VERSION}.`);
   }
   const versionTwo = input.schemaVersion === 1 ? {
@@ -174,10 +181,18 @@ export function migrateAnnotationDocument(input, expectedBookId) {
       updatedBy: { ...DEFAULT_LOCAL_ACTOR },
     })),
   } : input;
-  return {
+  const versionThree = versionTwo.schemaVersion === 2 ? {
     ...versionTwo,
-    schemaVersion: ANNOTATION_SCHEMA_VERSION,
+    schemaVersion: 3,
     annotations: versionTwo.annotations.map((annotation) => ({ ...annotation, category: "general" })),
+  } : versionTwo;
+  return {
+    ...versionThree,
+    schemaVersion: ANNOTATION_SCHEMA_VERSION,
+    annotations: versionThree.annotations.map((annotation) => ({
+      ...annotation,
+      revisionId: annotation.revisionId ?? "legacy",
+    })),
   };
 }
 
@@ -191,9 +206,10 @@ function emptyDocument(bookId, now) {
 }
 
 export class AnnotationRepository {
-  constructor({ filePath, bookId, clock = () => new Date(), createId = () => `annotation-${Bun.randomUUIDv7()}` }) {
+  constructor({ filePath, bookId, revisionId = "legacy", clock = () => new Date(), createId = () => `annotation-${Bun.randomUUIDv7()}` }) {
     this.filePath = filePath;
     this.bookId = bookId;
+    this.revisionId = requireString(revisionId, "revisionId");
     this.clock = clock;
     this.createId = createId;
     this.mutationQueue = Promise.resolve();
@@ -243,6 +259,7 @@ export class AnnotationRepository {
       const annotation = {
         id: this.createId(),
         bookId: this.bookId,
+        revisionId: this.revisionId,
         ...validateAnnotationDraft(input),
         author: actor,
         updatedBy: actor,
@@ -286,6 +303,31 @@ export class AnnotationRepository {
       document.updatedAt = this.now();
       await this.persistDocument(document);
       return true;
+    });
+  }
+
+  async anonymizeAuthor(userId) {
+    const id = requireString(userId, "userId");
+    return this.enqueueMutation(async () => {
+      const document = await this.readDocument();
+      const replacement = erasedActor(id);
+      let changed = 0;
+      document.annotations = document.annotations.map((annotation) => {
+        const replacesAuthor = annotation.author.id === id;
+        const replacesUpdater = annotation.updatedBy.id === id;
+        if (!replacesAuthor && !replacesUpdater) return annotation;
+        changed += 1;
+        return {
+          ...annotation,
+          author: replacesAuthor ? replacement : annotation.author,
+          updatedBy: replacesUpdater ? replacement : annotation.updatedBy,
+        };
+      });
+      if (changed > 0) {
+        document.updatedAt = this.now();
+        await this.persistDocument(document);
+      }
+      return { changed, actor: replacement };
     });
   }
 

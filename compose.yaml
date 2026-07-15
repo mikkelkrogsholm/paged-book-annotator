@@ -12,10 +12,10 @@ services:
       PBA_ADMIN_PASSWORD: ${PBA_ADMIN_PASSWORD:-}
       PBA_LOG_LEVEL: ${PBA_LOG_LEVEL:-info}
       PBA_LOG_FORMAT: ${PBA_LOG_FORMAT:-json}
+      PBA_DATA_DIR: /data
     ports:
       - "127.0.0.1:${PORT:-4174}:4173"
     volumes:
-      - ./example/book:/book:ro
       - ./data:/data
     read_only: true
     tmpfs:

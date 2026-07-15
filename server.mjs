@@ -1,12 +1,16 @@
-import { stat } from "node:fs/promises";
-import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { mkdir, stat } from "node:fs/promises";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ACCESS_PRESETS, PERMISSIONS, resolveAccessPolicy } from "./src/server/access-policy.mjs";
 import { ANNOTATION_SCHEMA_VERSION, AnnotationRepository } from "./src/server/annotation-repository.mjs";
 import { ApplicationError, BookCollaboration } from "./src/server/application-service.mjs";
 import { BookContentIndex } from "./src/server/book-content-index.mjs";
+import { BookCatalogRepository } from "./src/server/book-catalog-repository.mjs";
+import { LocalBookStorage } from "./src/server/book-storage.mjs";
 import { BOOK_ROLES, COLLABORATION_SCHEMA_VERSION, CollaborationRepository, USER_ROLES } from "./src/server/collaboration-repository.mjs";
+import { LibraryApplication } from "./src/server/library-application.mjs";
+import { ManagedBookCatalog } from "./src/server/managed-book-catalog.mjs";
 import { handleMcpHttpRequest } from "./src/server/mcp-server.mjs";
 import { createOperationalLogger, resolveLoggingConfig } from "./src/server/operational-logger.mjs";
 
@@ -46,15 +50,20 @@ export async function loadBookViewerConfig(configPath) {
   const absoluteConfigPath = resolve(configPath);
   const configDirectory = dirname(absoluteConfigPath);
   const raw = await Bun.file(absoluteConfigPath).json();
-  if (!raw.book?.id || !raw.book?.title || !raw.book?.sourceDir || !raw.book?.document) {
-    throw new TypeError("Konfigurationen kræver book.id, book.title, book.sourceDir og book.document.");
+  if (raw.book && (!raw.book.id || !raw.book.title || !raw.book.sourceDir || !raw.book.document)) {
+    throw new TypeError("En bootstrap-bog kræver book.id, book.title, book.sourceDir og book.document.");
   }
-  if (!raw.annotations?.file) throw new TypeError("Konfigurationen kræver annotations.file.");
-  const paginationTimeoutMs = Number(raw.book.paginationTimeoutMs ?? 45_000);
+  const paginationTimeoutMs = Number(raw.book?.paginationTimeoutMs ?? 45_000);
   if (!Number.isSafeInteger(paginationTimeoutMs) || paginationTimeoutMs < 5_000 || paginationTimeoutMs > 300_000) {
     throw new TypeError("book.paginationTimeoutMs skal være et heltal mellem 5000 og 300000.");
   }
-  const annotationsFile = resolveFromConfig(configDirectory, raw.annotations.file);
+  const configuredDataDir = process.env.PBA_DATA_DIR || raw.library?.dataDir || "data";
+  const dataDir = resolveFromConfig(configDirectory, configuredDataDir);
+  const annotationsFile = raw.annotations?.file ? resolveFromConfig(configDirectory, raw.annotations.file) : "";
+  const uploadMaxBytes = Number(raw.library?.uploadMaxBytes ?? 100 * 1024 * 1024);
+  if (!Number.isSafeInteger(uploadMaxBytes) || uploadMaxBytes < 1_000_000) {
+    throw new TypeError("library.uploadMaxBytes skal være et heltal på mindst 1000000 bytes.");
+  }
   const sessionHours = Number(raw.auth?.sessionHours ?? 24 * 14);
   const invitationHours = Number(raw.auth?.invitationHours ?? 24 * 7);
   if (!Number.isFinite(sessionHours) || sessionHours < 1) throw new TypeError("auth.sessionHours skal være mindst 1.");
@@ -63,16 +72,30 @@ export async function loadBookViewerConfig(configPath) {
   return {
     configPath: absoluteConfigPath,
     server: { host: raw.server?.host ?? "127.0.0.1", port: Number(raw.server?.port ?? 4173) },
-    book: {
+    library: {
+      dataDir,
+      catalogDatabase: process.env.PBA_CATALOG_DATABASE
+        ? resolve(process.env.PBA_CATALOG_DATABASE)
+        : process.env.PBA_DATA_DIR
+          ? join(dataDir, "catalog.sqlite")
+          : resolveFromConfig(configDirectory, raw.library?.catalogDatabase ?? join(configuredDataDir, "catalog.sqlite")),
+      defaultBookId: String(raw.library?.defaultBookId ?? raw.book?.id ?? ""),
+      uploadMaxBytes,
+    },
+    book: raw.book ? {
       id: String(raw.book.id), title: String(raw.book.title), subtitle: String(raw.book.subtitle ?? ""),
       mark: String(raw.book.mark ?? raw.book.title.slice(0, 1)), language: String(raw.book.language ?? "da"),
       sourceDir: resolveFromConfig(configDirectory, raw.book.sourceDir), document: String(raw.book.document),
       navigation: raw.book.navigation ? String(raw.book.navigation) : "", paginationTimeoutMs,
       buildId: String(raw.book.buildId ?? ""),
-    },
+    } : null,
     annotations: { file: annotationsFile },
     collaboration: {
-      database: resolveFromConfig(configDirectory, raw.collaboration?.database ?? `${raw.annotations.file}.collaboration.sqlite`),
+      database: process.env.PBA_COLLABORATION_DATABASE
+        ? resolve(process.env.PBA_COLLABORATION_DATABASE)
+        : process.env.PBA_DATA_DIR
+          ? join(dataDir, "collaboration.sqlite")
+          : resolveFromConfig(configDirectory, raw.collaboration?.database ?? join(configuredDataDir, "collaboration.sqlite")),
     },
     auth: { sessionHours, invitationHours },
     access: resolveAccessPolicy(raw.access),
@@ -159,7 +182,7 @@ function principalKind(principal) {
   return principal?.kind ?? "anonymous";
 }
 
-async function requestContext(request, service) {
+async function requestContext(request, service, { bookId } = {}) {
   const cookies = parseCookies(request);
   const guestId = cookies[guestCookieName] || `guest-${Bun.randomUUIDv7()}`;
   return {
@@ -167,6 +190,7 @@ async function requestContext(request, service) {
     guestId,
     setGuestCookie: !cookies[guestCookieName],
     principal: await service.resolvePrincipal({
+      bookId,
       sessionSecret: cookies[sessionCookieName] ?? "",
       bearerToken: bearerToken(request),
       guestId,
@@ -202,16 +226,17 @@ async function staticFileResponse(root, requestPath, { headOnly = false } = {}) 
   } });
 }
 
-function publicConfig(config, service, principal) {
+function publicConfig(config, service, principal, { managed = false } = {}) {
+  const assetRoot = managed ? `/books/${encodeURIComponent(config.book.id)}/assets` : "/book";
   return {
     schemaVersion: 2,
     annotationSchemaVersion: ANNOTATION_SCHEMA_VERSION,
     runtime: { name: "Bun", version: Bun.version },
     book: {
       id: config.book.id, title: config.book.title, subtitle: config.book.subtitle, mark: config.book.mark,
-      language: config.book.language, documentUrl: `/book/${encodeURI(config.book.document)}`,
-      navigationUrl: config.book.navigation ? `/book/${encodeURI(config.book.navigation)}` : "",
-      paginationTimeoutMs: config.book.paginationTimeoutMs, buildId: config.book.buildId,
+      language: config.book.language, documentUrl: `${assetRoot}/${encodeURI(config.book.document)}`,
+      navigationUrl: config.book.navigation ? `${assetRoot}/${encodeURI(config.book.navigation)}` : "",
+      paginationTimeoutMs: config.book.paginationTimeoutMs, buildId: config.book.buildId, revisionId: config.book.revisionId ?? "legacy",
     },
     access: { ...service.policy },
     session: service.session(principal),
@@ -219,9 +244,9 @@ function publicConfig(config, service, principal) {
   };
 }
 
-async function apiResponse(request, pathname, url, context, service, config) {
+async function apiResponse(request, pathname, url, context, service, config, { platform = null, managed = false } = {}) {
   const { principal, cookies } = context;
-  if (request.method === "GET" && pathname === "/api/config") return jsonResponse(200, publicConfig(config, service, principal));
+  if (request.method === "GET" && pathname === "/api/config") return jsonResponse(200, publicConfig(config, service, principal, { managed }));
   if (request.method === "GET" && pathname === "/api/session") return jsonResponse(200, service.session(principal));
   if (request.method === "POST" && pathname === "/api/auth/login") {
     const result = await service.login(await readJson(request));
@@ -236,12 +261,27 @@ async function apiResponse(request, pathname, url, context, service, config) {
     return withCookie(jsonResponse(200, { changed: true, loginRequired: true }), cookie(sessionCookieName, "", { maxAge: 0, secure: config.security.secureCookies }));
   }
   if (request.method === "POST" && pathname === "/api/auth/register") {
-    const result = await service.register(await readJson(request));
-    return withCookie(jsonResponse(201, service.session(result.principal)), cookie(sessionCookieName, result.secret, { maxAge: config.auth.sessionHours * 3600, secure: config.security.secureCookies }));
+    const input = await readJson(request);
+    const target = platform && input.bookId ? platform.serviceForBook(input.bookId) : service;
+    const result = await target.register(input);
+    return withCookie(jsonResponse(201, target.session(result.principal)), cookie(sessionCookieName, result.secret, { maxAge: config.auth.sessionHours * 3600, secure: config.security.secureCookies }));
   }
   if (request.method === "POST" && pathname === "/api/auth/invitations/accept") {
-    const result = await service.acceptInvitation(await readJson(request));
-    return withCookie(jsonResponse(200, service.session(result.principal)), cookie(sessionCookieName, result.secret, { maxAge: config.auth.sessionHours * 3600, secure: config.security.secureCookies }));
+    const input = await readJson(request);
+    const target = platform && input.bookId ? platform.serviceForBook(input.bookId) : service;
+    const result = await target.acceptInvitation(input);
+    return withCookie(jsonResponse(200, target.session(result.principal)), cookie(sessionCookieName, result.secret, { maxAge: config.auth.sessionHours * 3600, secure: config.security.secureCookies }));
+  }
+  if (request.method === "POST" && pathname === "/api/auth/access-codes/accept" && platform) {
+    const result = await platform.acceptAccessCode(await readJson(request));
+    return withCookie(jsonResponse(200, platform.sessionForBook(result.principal, result.principal.bookId)), cookie(sessionCookieName, result.secret, { maxAge: config.auth.sessionHours * 3600, secure: config.security.secureCookies }));
+  }
+  if (request.method === "GET" && pathname === "/api/account/export") {
+    return jsonResponse(200, await (managed && platform ? platform.exportUserData(principal) : service.exportUserData(principal)));
+  }
+  if (request.method === "DELETE" && pathname === "/api/account") {
+    const erased = await (managed && platform ? platform.eraseUserData(principal) : service.eraseUserData(principal));
+    return withCookie(jsonResponse(200, { erased }), cookie(sessionCookieName, "", { maxAge: 0, secure: config.security.secureCookies }));
   }
 
   if (request.method === "GET" && pathname === "/api/annotations") return jsonResponse(200, await service.listAnnotations(principal));
@@ -308,7 +348,101 @@ async function apiResponse(request, pathname, url, context, service, config) {
   return null;
 }
 
-async function routeBookViewerRequest(request, { config, service, state, logger }) {
+async function libraryAdminResponse(request, pathname, url, context, platform, config) {
+  const { principal } = context;
+  if (pathname === "/api/admin/books" && request.method === "GET") {
+    return jsonResponse(200, { books: platform.listBooks(principal) });
+  }
+  if (pathname === "/api/admin/books" && request.method === "POST") {
+    return jsonResponse(201, { book: platform.createBook(principal, await readJson(request)) });
+  }
+  if (pathname === "/api/admin/users" && request.method === "GET") {
+    return jsonResponse(200, { users: platform.listUsers(principal) });
+  }
+  if (pathname === "/api/admin/users" && request.method === "POST") {
+    return jsonResponse(201, { user: await platform.createUser(principal, await readJson(request)) });
+  }
+  const globalUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+  if (globalUserMatch && request.method === "PATCH") {
+    return jsonResponse(200, { user: platform.updateUser(principal, globalUserMatch[1], await readJson(request)) });
+  }
+  const globalPasswordMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/password$/);
+  if (globalPasswordMatch && request.method === "PUT") {
+    const input = await readJson(request);
+    return jsonResponse(200, { user: await platform.resetUserPassword(principal, globalPasswordMatch[1], input.newPassword) });
+  }
+  if (pathname === "/api/admin/tokens" && request.method === "GET") {
+    return jsonResponse(200, { tokens: platform.listTokens(principal) });
+  }
+  if (pathname === "/api/admin/tokens" && request.method === "POST") {
+    return jsonResponse(201, { token: await platform.createToken(principal, await readJson(request)) });
+  }
+  const globalTokenMatch = pathname.match(/^\/api\/admin\/tokens\/([^/]+)$/);
+  if (globalTokenMatch && request.method === "DELETE") {
+    return jsonResponse(200, { revoked: platform.revokeToken(principal, globalTokenMatch[1]) });
+  }
+
+  const match = pathname.match(/^\/api\/admin\/books\/([^/]+)(?:\/(.*))?$/);
+  if (!match) return null;
+  const bookId = platform.resolveBookId(match[1]);
+  const tail = match[2] ?? "";
+  if (!tail && request.method === "GET") {
+    return jsonResponse(200, { book: platform.getBook(principal, bookId), access: platform.accessSettings(principal, bookId) });
+  }
+  if (!tail && request.method === "DELETE") return jsonResponse(200, { book: platform.archiveBook(principal, bookId) });
+  if (tail === "overview" && request.method === "GET") {
+    const members = platform.listMembers(principal, bookId);
+    const annotations = await platform.listAnnotations(principal, bookId);
+    return jsonResponse(200, {
+      members: members.length,
+      annotations: annotations.annotations.length,
+      openAnnotations: annotations.annotations.filter((item) => item.status === "open").length,
+    });
+  }
+  if (tail === "access" && request.method === "GET") return jsonResponse(200, { access: platform.accessSettings(principal, bookId) });
+  if (tail === "access" && request.method === "PUT") return jsonResponse(200, { access: platform.updateAccessSettings(principal, bookId, await readJson(request)) });
+  if (tail === "members" && request.method === "GET") return jsonResponse(200, { members: platform.listMembers(principal, bookId) });
+  const memberMatch = tail.match(/^members\/([^/]+)$/);
+  if (memberMatch && request.method === "PUT") {
+    return jsonResponse(200, { user: platform.updateUser(principal, memberMatch[1], { ...await readJson(request), bookId }) });
+  }
+  if (tail === "invitations" && request.method === "GET") return jsonResponse(200, { invitations: platform.listInvitations(principal, bookId) });
+  if (tail === "invitations" && request.method === "POST") return jsonResponse(201, { invitation: await platform.createInvitation(principal, bookId, await readJson(request)) });
+  const invitationMatch = tail.match(/^invitations\/([^/]+)$/);
+  if (invitationMatch && request.method === "DELETE") return jsonResponse(200, { revoked: platform.revokeInvitation(principal, bookId, invitationMatch[1]) });
+  if (tail === "access-codes" && request.method === "GET") return jsonResponse(200, { accessCodes: platform.listAccessCodes(principal, bookId) });
+  if (tail === "access-codes" && request.method === "POST") return jsonResponse(201, { accessCode: await platform.createAccessCode(principal, bookId, await readJson(request)) });
+  const accessCodeMatch = tail.match(/^access-codes\/([^/]+)$/);
+  if (accessCodeMatch && request.method === "DELETE") return jsonResponse(200, { revoked: platform.revokeAccessCode(principal, bookId, accessCodeMatch[1]) });
+  if (tail === "revisions" && request.method === "GET") return jsonResponse(200, { revisions: platform.listBookRevisions(principal, bookId) });
+  const publishMatch = tail.match(/^revisions\/([^/]+)\/publish$/);
+  if (publishMatch && request.method === "POST") return jsonResponse(200, platform.publishBookRevision(principal, bookId, publishMatch[1]));
+  if (tail === "uploads" && request.method === "POST") return jsonResponse(201, platform.createBookUpload(principal, bookId, await readJson(request)));
+  const uploadContentMatch = tail.match(/^uploads\/([^/]+)\/content$/);
+  if (uploadContentMatch && request.method === "PUT") return jsonResponse(200, await platform.writeBookUpload(principal, bookId, uploadContentMatch[1], request));
+  const validateUploadMatch = tail.match(/^uploads\/([^/]+)\/validate$/);
+  if (validateUploadMatch && request.method === "POST") return jsonResponse(200, await platform.validateBookUpload(principal, bookId, validateUploadMatch[1]));
+  if (tail === "annotations" && request.method === "GET") return jsonResponse(200, await platform.listAnnotations(principal, bookId));
+  if (tail === "annotations/export" && request.method === "GET") {
+    const exported = await platform.exportAnnotations(principal, bookId, url.searchParams.get("format") ?? "json");
+    return new Response(exported.body, { status: 200, headers: {
+      "Content-Type": exported.contentType,
+      "Content-Disposition": `attachment; filename="${bookId}.annotations.${exported.extension}"`,
+      "Cache-Control": "no-store",
+    } });
+  }
+  const annotationMatch = tail.match(/^annotations\/([^/]+)$/);
+  if (annotationMatch && request.method === "PUT") {
+    const annotation = await platform.updateAnnotation(principal, bookId, annotationMatch[1], await readJson(request));
+    return jsonResponse(annotation ? 200 : 404, annotation ? { annotation } : { error: "Annotationen findes ikke." });
+  }
+  if (tail === "progress" && request.method === "GET") return jsonResponse(200, { progress: platform.listAllProgress(principal, bookId) });
+  if (tail === "tokens" && request.method === "GET") return jsonResponse(200, { tokens: platform.listTokens(principal, { bookId }) });
+  if (tail === "audit" && request.method === "GET") return jsonResponse(200, { events: platform.listAudit(principal, { bookId, limit: url.searchParams.get("limit") }) });
+  return null;
+}
+
+async function routeBookViewerRequest(request, { config, service, platform = null, state, logger }) {
   if (!localHostHeaderIsAllowed(request.headers.get("host"))) return jsonResponse(403, { error: "Book Viewer accepterer kun lokale værter." });
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !originIsAllowed(request.headers.get("origin"), config.security.allowedOrigins)) {
     return jsonResponse(403, { error: "Origin er ikke tilladt." });
@@ -319,30 +453,72 @@ async function routeBookViewerRequest(request, { config, service, state, logger 
   state.path = normalizedRequestPath(pathname, config);
   if (request.method === "GET" && pathname === "/api/health") {
     return jsonResponse(200, {
-      status: "ok", bookId: config.book.id, runtime: { name: "Bun", version: Bun.version },
+      status: "ok", bookId: service?.bookId ?? platform?.defaultBookId ?? null, runtime: { name: "Bun", version: Bun.version },
       schemas: { annotations: ANNOTATION_SCHEMA_VERSION, collaboration: COLLABORATION_SCHEMA_VERSION },
-      storage: service.health(),
+      storage: service?.health() ?? { collaboration: platform?.collaboration.health() ? "ok" : "unavailable" },
     });
   }
   if (config.mcp.enabled && pathname === config.mcp.endpoint && ["GET", "POST", "DELETE"].includes(request.method)) {
     state.principalKind = bearerToken(request) ? "token" : "anonymous";
-    return handleMcpHttpRequest(request, { service, config, bearerToken: bearerToken(request), logger });
+    return handleMcpHttpRequest(request, { service: platform ?? service, config, bearerToken: bearerToken(request), logger });
   }
-  const context = await requestContext(request, service);
+
+  let activeService = service;
+  let activeConfig = config;
+  let apiPathname = pathname;
+  let managed = false;
+  let managedBookId = "";
+  const managedApiMatch = platform && pathname.match(/^\/api\/books\/([^/]+)(\/.*)?$/);
+  const managedReaderMatch = platform && pathname.match(/^\/books\/([^/]+)(?:\/|$)/);
+  if (managedApiMatch) {
+    managedBookId = platform.resolveBookId(managedApiMatch[1]);
+    const book = platform.bookContext(managedBookId);
+    activeService = platform.serviceForBook(managedBookId);
+    activeConfig = book.config;
+    apiPathname = `/api${managedApiMatch[2] ?? ""}`;
+    managed = true;
+  }
+  const requestBookId = managedBookId || (managedReaderMatch ? platform.resolveBookId(managedReaderMatch[1]) : "");
+  const context = await requestContext(request, platform ?? activeService, { bookId: requestBookId || platform?.defaultBookId });
   state.principalKind = principalKind(context.principal);
+
+  if (platform && pathname.startsWith("/api/admin/")) {
+    const response = await libraryAdminResponse(request, pathname, url, context, platform, config);
+    if (response) return withContextCookie(response, context, config);
+  }
   if (pathname.startsWith("/api/")) {
-    const response = await apiResponse(request, pathname, url, context, service, config);
+    if (platform && pathname === "/api/config" && !activeService) {
+      const canAdminister = context.principal?.kind === "local" || context.principal?.globalRole === "instance_admin" || context.principal?.instanceAdmin === true;
+      return withContextCookie(jsonResponse(200, {
+        schemaVersion: 2,
+        runtime: { name: "Bun", version: Bun.version },
+        book: null,
+        session: { principal: context.principal, capabilities: { canManageUsers: canAdminister } },
+        features: { admin: true, mcp: config.mcp.enabled },
+      }), context, config);
+    }
+    if (!activeService) throw new ApplicationError(404, "Biblioteket har endnu ingen bøger.", "empty_library");
+    const response = await apiResponse(request, apiPathname, url, context, activeService, activeConfig, { platform, managed });
     if (response) return withContextCookie(response, context, config);
   }
 
   const readsStaticFile = request.method === "GET" || request.method === "HEAD";
+  const managedAssetMatch = platform && pathname.match(/^\/books\/([^/]+)\/assets\/(.+)$/);
+  if (readsStaticFile && managedAssetMatch) {
+    const bookId = platform.resolveBookId(managedAssetMatch[1]);
+    const book = platform.bookContext(bookId);
+    platform.serviceForBook(bookId).assertCanRead(platform.principalForBook(context.principal, bookId));
+    const response = await staticFileResponse(book.config.book.sourceDir, `/${managedAssetMatch[2]}`, { headOnly: request.method === "HEAD" });
+    if (response) return withContextCookie(response, context, config);
+  }
   if (readsStaticFile && pathname.startsWith("/book/")) {
     service.assertCanRead(context.principal);
     const response = await staticFileResponse(config.book.sourceDir, pathname.slice("/book".length), { headOnly: request.method === "HEAD" });
     if (response) return withContextCookie(response, context, config);
   }
   if (readsStaticFile) {
-    const viewerPath = pathname === "/" || pathname === "/preview.html" ? "/index.html" : pathname === "/admin" || pathname === "/admin/" ? "/admin/index.html" : pathname;
+    const isManagedReader = platform && /^\/books\/[^/]+\/?$/.test(pathname);
+    const viewerPath = pathname === "/" || pathname === "/preview.html" || isManagedReader ? "/index.html" : pathname === "/admin" || pathname === "/admin/" ? "/admin/index.html" : pathname;
     const response = await staticFileResponse(publicRoot, viewerPath, { headOnly: request.method === "HEAD" });
     if (response) return withContextCookie(response, context, config);
   }
@@ -352,6 +528,7 @@ async function routeBookViewerRequest(request, { config, service, state, logger 
 export async function handleBookViewerRequest(request, {
   config,
   service,
+  platform = null,
   logger = silentLogger,
   createRequestId = () => `request-${Bun.randomUUIDv7()}`,
   monotonicClock = () => performance.now(),
@@ -362,7 +539,7 @@ export async function handleBookViewerRequest(request, {
   const state = { path: normalizedRequestPath(rawPath, config), principalKind: "anonymous" };
   let response;
   try {
-    response = await routeBookViewerRequest(request, { config, service, state, logger });
+    response = await routeBookViewerRequest(request, { config, service, platform, state, logger });
   } catch (error) {
     const status = error instanceof ApplicationError ? error.status : error instanceof TypeError || error instanceof SyntaxError || error instanceof RangeError ? 400 : 500;
     logger.error("request.failed", { requestId: id, method: request.method, path: state.path, status, ...errorMetadata(error) });
@@ -382,30 +559,39 @@ export async function handleBookViewerRequest(request, {
 
 export function createBookViewerServer({
   config,
-  repository = new AnnotationRepository({ filePath: config.annotations.file, bookId: config.book.id }),
-  collaborationRepository = new CollaborationRepository({
-    filePath: config.collaboration.database, bookId: config.book.id,
-    sessionHours: config.auth.sessionHours, invitationHours: config.auth.invitationHours,
-  }),
-  bookContentIndex = config.book.sourceDir && config.book.document
-    ? new BookContentIndex({ filePath: resolve(config.book.sourceDir, config.book.document), bookId: config.book.id, buildId: config.book.buildId })
-    : null,
-  service = new BookCollaboration({ config, annotationRepository: repository, collaborationRepository, bookContentIndex }),
+  repository,
+  collaborationRepository,
+  bookContentIndex,
+  service,
+  platform = null,
   hostname = config.server.host,
   port = config.server.port,
-  logger = createOperationalLogger({ ...config.logging, baseFields: { component: "http", bookId: config.book.id } }),
+  logger = createOperationalLogger({ ...config.logging, baseFields: { component: "http", bookId: config.book?.id ?? "library" } }),
   createRequestId,
   monotonicClock,
 }) {
+  if (!service && !platform) {
+    repository ??= new AnnotationRepository({ filePath: config.annotations.file, bookId: config.book.id });
+    collaborationRepository ??= new CollaborationRepository({
+      filePath: config.collaboration.database, bookId: config.book.id,
+      sessionHours: config.auth.sessionHours, invitationHours: config.auth.invitationHours,
+    });
+    bookContentIndex ??= config.book.sourceDir && config.book.document
+      ? new BookContentIndex({ filePath: resolve(config.book.sourceDir, config.book.document), bookId: config.book.id, buildId: config.book.buildId })
+      : null;
+    service = new BookCollaboration({ config, annotationRepository: repository, collaborationRepository, bookContentIndex });
+  }
+  collaborationRepository ??= platform?.collaboration;
   const server = Bun.serve({
-    hostname, port,
-    fetch: (request) => handleBookViewerRequest(request, { config, service, logger, createRequestId, monotonicClock }),
+    hostname, port, maxRequestBodySize: config.library?.uploadMaxBytes ?? maximumRequestBytes,
+    fetch: (request) => handleBookViewerRequest(request, { config, service, platform, logger, createRequestId, monotonicClock }),
     error(error) { logger.error("server.fetch_error", errorMetadata(error)); return jsonResponse(500, { error: "Intern serverfejl." }); },
   });
   server.bookApplicationService = service;
+  server.libraryApplication = platform;
   server.collaborationRepository = collaborationRepository;
   server.operationalLogger = logger;
-  logger.info("server.started", { host: hostname, port: server.port, runtime: `Bun ${Bun.version}`, accessPreset: config.access.preset });
+  logger.info("server.started", { host: hostname, port: server.port, runtime: `Bun ${Bun.version}`, accessPreset: config.access.preset, mode: platform ? "managed-library" : "legacy" });
   return server;
 }
 
@@ -414,29 +600,61 @@ export async function startBookViewer(options = {}) {
   const config = await loadBookViewerConfig(configPath);
   const hostname = options.host ?? config.server.host;
   const port = options.port ?? config.server.port;
-  const logger = options.logger ?? createOperationalLogger({ ...config.logging, baseFields: { component: "http", bookId: config.book.id } });
+  const logger = options.logger ?? createOperationalLogger({ ...config.logging, baseFields: { component: "http", bookId: config.book?.id ?? "library" } });
+  const catalogRepository = new BookCatalogRepository({ filePath: config.library.catalogDatabase });
+  const storage = new LocalBookStorage({
+    rootDir: config.library.dataDir,
+    limits: { maxArchiveBytes: config.library.uploadMaxBytes },
+  });
+  const catalog = new ManagedBookCatalog({ repository: catalogRepository, storage });
+  if (catalog.listBooks({ includeArchived: true }).length === 0 && config.book) {
+    await catalog.importBookDirectory({
+      sourceDir: config.book.sourceDir,
+      book: {
+        id: config.book.id,
+        slug: config.book.id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+        title: config.book.title,
+        subtitle: config.book.subtitle,
+        language: config.book.language,
+      },
+      createdBy: "legacy-bootstrap",
+      publish: true,
+    });
+    const legacyAnnotations = config.annotations.file && Bun.file(config.annotations.file);
+    const managedAnnotations = resolve(config.library.dataDir, "library", config.book.id, "annotations.json");
+    if (legacyAnnotations && await legacyAnnotations.exists() && !(await Bun.file(managedAnnotations).exists())) {
+      await mkdir(dirname(managedAnnotations), { recursive: true });
+      await Bun.write(managedAnnotations, legacyAnnotations);
+    }
+  }
   const collaborationRepository = new CollaborationRepository({
     filePath: config.collaboration.database,
-    bookId: config.book.id,
     sessionHours: config.auth.sessionHours,
     invitationHours: config.auth.invitationHours,
   });
+  const platform = new LibraryApplication({ config, catalog, collaborationRepository });
   if (process.env.PBA_ADMIN_EMAIL && process.env.PBA_ADMIN_PASSWORD) {
-    await collaborationRepository.ensureBootstrapAdmin({
+    const administrator = await collaborationRepository.ensureBootstrapAdmin({
       email: process.env.PBA_ADMIN_EMAIL,
       displayName: process.env.PBA_ADMIN_NAME ?? "Administrator",
       password: process.env.PBA_ADMIN_PASSWORD,
     });
+    for (const book of catalog.listBooks()) collaborationRepository.setMembership(administrator.id, "book_admin", { bookId: book.id });
   }
-  const server = createBookViewerServer({ config, collaborationRepository, hostname, port, logger });
-  return { server, config, host: hostname, port: server.port };
+  const service = platform.defaultBookId ? platform.serviceForBook(platform.defaultBookId) : null;
+  const server = createBookViewerServer({ config, collaborationRepository, platform, service, hostname, port, logger });
+  server.catalogRepository = catalogRepository;
+  return { server, config, platform, host: hostname, port: server.port };
 }
 
 export async function stopBookViewer(server, { reason = "requested", closeRepository = true } = {}) {
   const logger = server.operationalLogger ?? silentLogger;
   logger.info("server.stopping", { reason });
   await server.stop();
-  if (closeRepository) server.collaborationRepository?.close();
+  if (closeRepository) {
+    server.collaborationRepository?.close();
+    server.catalogRepository?.close();
+  }
   logger.info("server.stopped", { reason });
 }
 

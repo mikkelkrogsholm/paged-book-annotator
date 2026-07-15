@@ -109,3 +109,24 @@ test("server exposes config, book assets and persistent annotation CRUD", async 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("configuration supports an empty managed library without a mounted bootstrap book", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "book-viewer-library-config-"));
+  const configPath = join(directory, "config.json");
+  await writeFile(configPath, JSON.stringify({
+    server: { host: "127.0.0.1", port: 0 },
+    library: { dataDir: "managed-data", uploadMaxBytes: 5_000_000 },
+    access: { preset: "privateReview" },
+  }));
+  try {
+    const config = await loadBookViewerConfig(configPath);
+    assert.equal(config.book, null);
+    assert.equal(config.library.defaultBookId, "");
+    assert.equal(config.library.dataDir, join(directory, "managed-data"));
+    assert.equal(config.library.catalogDatabase, join(directory, "managed-data/catalog.sqlite"));
+    assert.equal(config.collaboration.database, join(directory, "managed-data/collaboration.sqlite"));
+    assert.equal(config.library.uploadMaxBytes, 5_000_000);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

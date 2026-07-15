@@ -9,10 +9,10 @@ repository. Server, fil-I/O og test kører på Bun. Den anbefalede kørsel er de
 medfølgende Docker-container. Valg af open-source-licens er bevidst ikke
 foretaget endnu.
 
-Docker-imaget er generisk og bygges aldrig til en bestemt bog. Det indeholder
-viewerens UI, API og selvhostede OFL-skrifter. En færdig, selvbærende bogmappe
-mountes read-only som `/book`; annotationer og eksportdata mountes read-write
-som `/data`. Derfor kan man skifte bog uden at genbygge viewer-imaget.
+Docker-imaget indeholder viewer, API, admin UI, MCP og selvhostede OFL-skrifter.
+Kun `/data` mountes skrivbart. Bøger oprettes i admin UI eller MCP og uploades
+som validerede `.tar.gz`-bundles; installationen kan have flere bøger og flere
+immutable revisioner af hver bog uden at genbygge imaget.
 
 ## Funktioner
 
@@ -24,7 +24,8 @@ som `/data`. Derfor kan man skifte bog uden at genbygge viewer-imaget.
 - side- og opslagsannotationer;
 - automatisk genforankring og synlig status for uforankrede kommentarer;
 - syv adgangsprofiler fra helt åben læsning til privat prøvelæsning;
-- lokale konti, åbne eller invitationsbaserede brugerforløb og flere administratorer;
+- lokale konti, åben, lukket, invitations- eller kodebaseret tilmelding og flere administratorer;
+- et flerbogsbibliotek med bogspecifikke medlemskaber, roller og token-grants;
 - attribuerede annotationer med kategori, redaktionel triage, ejerskab, synlighed, moderation og JSON/CSV/Markdown-eksport;
 - læseprogression, der skelner mellem seneste position, engagerede steder og eksplicit færdigmarkering, med fravalg og sletning;
 - admin UI med Share Center, persistente adgangsprofiler, brugere, password-reset, invitationer, triage, tokens og audit;
@@ -41,11 +42,11 @@ Fra denne mappe:
 docker compose up --build
 ```
 
-Eksempelbogen åbnes på `http://127.0.0.1:4174/preview.html`.
+Eksempelbogen åbnes på `http://127.0.0.1:4174/books/example-book`.
 Administration findes på `http://127.0.0.1:4174/admin`.
-Containerporten publiceres kun på værtens loopback-adresse. Eksempelbundlet
-`./example/book/` mountes read-only, mens `./data/` er det eneste skrivbare
-bind mount.
+Containerporten publiceres kun på værtens loopback-adresse. `./data/` er det
+eneste bind mount. Ved første start importeres den medfølgende eksempelbog som
+første katalogrevision; derefter administreres bøger og revisioner i UI'et.
 
 Stop igen med:
 
@@ -72,7 +73,7 @@ bun run start
 5. Åbn **Indhold**, klik på den aktuelle position eller tryk `G` for at søge i
    bogens struktur eller gå direkte til en fysisk Paged.js-side.
 
-Start en anden bog direkte med dens egen konfigurationsfil:
+Start et andet bibliotek med dets egen installationskonfiguration:
 
 ```sh
 bun server.mjs --config /absolut/sti/til/book-viewer.config.json
@@ -85,8 +86,8 @@ bun run init --book-dir /absolut/sti/til/bog --title "Min bog"
 bun scripts/validate-book-document.mjs /absolut/sti/til/bog/book.html
 ```
 
-Til Docker leveres konfigurationen som `book-viewer.json` i roden af det
-mountede bundle. Se `compose.yaml` og `example/book/book-viewer.json`.
+Opret derefter en bog i `/admin`, upload et `.tar.gz`-bundle og publicér den
+validerede revision. Det samme flow findes som MCP-tools.
 
 ## Integration
 
@@ -103,8 +104,12 @@ samt [tests og driftslogging](docs/logging-and-testing.md).
 
 ## Backup og restore
 
-Stop serveren før restore. Backup læser et konsistent SQLite-snapshot og pakker
-det sammen med annotationsfilen og en SHA-256-checksum:
+Den nuværende `bun run data`-kommando er kompatibilitetsværktøjet til det
+tidligere enkeltbogsformat. For et administreret flerbogsbibliotek skal hele
+`/data` sikkerhedskopieres konsistent, mens serveren er stoppet; her ligger
+katalog, samarbejdsdatabase, annotationer og alle bogrevisioner.
+
+Legacy-kommandoerne er:
 
 ```sh
 bun run data backup --config /sti/til/book-viewer.json --out /sikker/sti/bog.pba-backup.json
@@ -142,8 +147,9 @@ Den anvendte Bun-runtime fremgår også af `/api/config`.
 
 ## Bevidste afgrænsninger
 
-Der sendes ikke e-mail, og der er ingen social login, realtidssamarbejde eller
-multitenancy. Invitationer leverer et link, som administratoren selv deler.
+Der sendes ikke e-mail, og der er ingen social login, realtidssamarbejde,
+organisationer eller betaling. Invitationer og adgangskoder deles af
+administratoren selv.
 Serveren afviser fortsat ikke-lokale Host-headere; offentlig deling kræver en
 TLS-reverse proxy, som sender en lokal upstream-Host, samt den offentlige origin
 i `security.allowedOrigins`. GitHub-publicering, hosting og licensvalg foretages
