@@ -33,11 +33,13 @@ function sharedAnchorForRange(range) {
 }
 
 export class AnnotationController {
-  constructor({ api, panel, reader, bookId }) {
+  constructor({ api, panel, reader, bookId, capabilities, principal }) {
     this.api = api;
     this.panel = panel;
     this.reader = reader;
     this.bookId = bookId;
+    this.capabilities = capabilities;
+    this.principal = principal;
     this.annotations = [];
     this.elementMode = false;
     this.hoverElement = null;
@@ -54,8 +56,15 @@ export class AnnotationController {
       onNavigate: (annotation) => this.navigate(annotation),
       onImport: (document) => this.import(document),
     });
-    this.bindAnnotationActions();
+    if (this.capabilities.canCreateAnnotations) this.bindAnnotationActions();
     await this.reload();
+    const requestedId = new URLSearchParams(window.location.search).get("annotation");
+    const requested = this.annotations.find((annotation) => annotation.id === requestedId);
+    if (requested) { this.panel.open(); this.navigate(requested); }
+  }
+
+  canEdit(annotation) {
+    return this.capabilities.canModerateAnnotations || annotation.author?.id === this.principal?.id;
   }
 
   bindAnnotationActions() {
@@ -227,7 +236,7 @@ export class AnnotationController {
           attached = true;
           if (annotation.status === "open") page.classList.add("has-page-annotation");
           const currentPageNumber = this.reader.pageNumber(page);
-          if (attachedScope && currentPageNumber !== annotation.target.pageNumber) {
+          if (attachedScope && currentPageNumber !== annotation.target.pageNumber && this.canEdit(annotation)) {
             pendingStateUpdateIds.add(annotation.id);
             stateChanges.push(this.api.update(annotation.id, {
               target: { ...annotation.target, pageNumber: currentPageNumber },
@@ -244,7 +253,7 @@ export class AnnotationController {
         attached = Boolean(result);
         attachedScope = result?.scope ?? null;
         if (result?.range && annotation.status === "open") highlightRanges.push(result.range);
-        if (result?.movedTarget) {
+        if (result?.movedTarget && this.canEdit(annotation)) {
           pendingStateUpdateIds.add(annotation.id);
           stateChanges.push(this.api.update(annotation.id, {
             target: result.movedTarget,
@@ -254,7 +263,7 @@ export class AnnotationController {
       }
 
       const nextAnchorState = attached ? "attached" : "orphaned";
-      if (nextAnchorState !== annotation.anchorState && !pendingStateUpdateIds.has(annotation.id)) {
+      if (nextAnchorState !== annotation.anchorState && !pendingStateUpdateIds.has(annotation.id) && this.canEdit(annotation)) {
         pendingStateUpdateIds.add(annotation.id);
         stateChanges.push(this.api.update(annotation.id, { anchorState: nextAnchorState }));
       }

@@ -22,7 +22,9 @@ function formatDate(value) {
 }
 
 export class AnnotationPanel {
-  constructor() {
+  constructor({ capabilities, principal }) {
+    this.capabilities = capabilities;
+    this.principal = principal;
     this.panel = document.querySelector("#annotationPanel");
     this.panelButton = document.querySelector("#annotationPanelButton");
     this.browser = document.querySelector("#annotationBrowser");
@@ -31,13 +33,20 @@ export class AnnotationPanel {
     this.empty = document.querySelector("#annotationEmpty");
     this.form = document.querySelector("#annotationForm");
     this.comment = document.querySelector("#annotationComment");
+    this.category = document.querySelector("#annotationCategory");
     this.formError = document.querySelector("#annotationFormError");
     this.filter = "open";
     this.annotations = [];
     this.draft = null;
     this.editingId = null;
     this.callbacks = {};
+    document.querySelector("#importButton").hidden = !capabilities.canModerateAnnotations;
+    document.querySelector(".file-actions a").hidden = !capabilities.canExportAnnotations;
     this.bindEvents();
+  }
+
+  canEdit(annotation) {
+    return this.capabilities.canModerateAnnotations || annotation.author?.id === this.principal?.id;
   }
 
   setCallbacks(callbacks) {
@@ -88,8 +97,8 @@ export class AnnotationPanel {
       }
       this.setSaving(true);
       try {
-        if (this.editingId) await this.callbacks.onUpdate?.(this.editingId, { comment });
-        else await this.callbacks.onCreate?.({ ...this.draft, comment });
+        if (this.editingId) await this.callbacks.onUpdate?.(this.editingId, { comment, category: this.category.value });
+        else await this.callbacks.onCreate?.({ ...this.draft, comment, category: this.category.value });
         this.showBrowser();
       } catch (error) {
         this.showFormError(error.message);
@@ -135,11 +144,14 @@ export class AnnotationPanel {
     this.list.innerHTML = annotations.map((annotation) => {
       const quote = annotation.target.selector?.exact;
       const orphaned = annotation.anchorState === "orphaned";
+      const editable = this.canEdit(annotation);
       return `
         <li class="annotation-item${annotation.status === "resolved" ? " is-resolved" : ""}${orphaned ? " is-orphaned" : ""}" data-annotation-id="${escapeHtml(annotation.id)}">
           <div class="annotation-item-meta">
             <span>${typeLabels[annotation.type]}</span>
             <span>Side ${annotation.target.pageNumber}</span>
+            <span>${escapeHtml(annotation.author?.displayName ?? "Ukendt")}</span>
+            <span>${escapeHtml(annotation.category ?? "general")}</span>
             ${orphaned ? "<strong>Skal genforankres</strong>" : ""}
           </div>
           <button class="annotation-target-button" type="button" data-action="navigate">
@@ -149,7 +161,7 @@ export class AnnotationPanel {
           <p>${escapeHtml(annotation.comment)}</p>
           <div class="annotation-item-footer">
             <time datetime="${escapeHtml(annotation.updatedAt)}">${formatDate(annotation.updatedAt)}</time>
-            <div>
+            <div${editable ? "" : " hidden"}>
               <button type="button" data-action="edit">Redigér</button>
               <button type="button" data-action="status">${annotation.status === "open" ? "Løs" : "Genåbn"}</button>
               <button type="button" data-action="delete">Slet</button>
@@ -160,6 +172,7 @@ export class AnnotationPanel {
   }
 
   openComposer(draft, editingId = null) {
+    if (!this.capabilities.canCreateAnnotations && !this.canEdit(draft)) return;
     this.draft = draft;
     this.editingId = editingId;
     const annotation = editingId ? draft : null;
@@ -170,6 +183,7 @@ export class AnnotationPanel {
     quote.hidden = !target.selector?.exact;
     quote.textContent = target.selector?.exact ?? "";
     this.comment.value = annotation?.comment ?? "";
+    this.category.value = annotation?.category ?? "general";
     this.formError.hidden = true;
     this.browser.hidden = true;
     this.composer.hidden = false;

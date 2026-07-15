@@ -1,68 +1,81 @@
-# Annotations-API
+# HTTP- og annotations-API
 
-API'en er same-origin og udstilles kun af den lokale Book Viewer-server.
-Alle svar er JSON, bortset fra bogens og viewerens statiske filer.
+API'et er same-origin og udstilles af Book Viewer-serveren. Svar er JSON,
+bortset fra statiske filer, eksport og MCP. Den centrale adgangspolitik
+filtrerer både UI-, API- og MCP-resultater.
 
-## Endpoints
+## Offentlige og sessionsbaserede endpoints
 
-### `GET /api/config`
+- `GET /api/config` — bogidentitet, adgangsprofil, aktuel principal og
+  capabilities uden lokale filstier.
+- `GET /api/health` — uautentificeret, ikke-følsom runtime-, schema- og
+  storage-readiness til lokal drift og Docker.
+- `GET /api/session` — aktuel principal og capabilities.
+- `POST /api/auth/login`, `/logout` og `/register` — cookie-sessioner;
+  registrering følger adgangsprofilen.
+- `POST /api/auth/invitations/accept` — accepterer en engangsinvitation og
+  opretter en session.
+- `POST /api/auth/password` — skifter eget password, lukker alle sessioner og
+  kræver nyt login.
+- `GET /api/annotations` — kun annotationer, aktøren må se.
+- `POST /api/annotations` — opretter og attribuerer en annotation.
+- `PUT|DELETE /api/annotations/:id` — ejeren eller en moderator kan ændre.
+- `GET /api/annotations/export?format=json|csv|markdown` — filtreret eksport.
+- `POST /api/annotations/import` — kræver moderationspermission.
+- `GET|PUT /api/progress` — aktørens stabile læseanker, sidehint og besøgte
+  ankre.
+- `GET|PUT /api/progress/preferences` — læserens trackingvalg; fravalg sletter
+  gemt progress og besøg.
 
-Returnerer den offentlige bogidentitet, dokumentets URL og de aktiverede
-funktioner. Lokale filstier returneres aldrig.
+JSON-requests er begrænset til 1 MB.
 
-### `GET /api/annotations`
+## Admin-endpoints
 
-Returnerer hele annotationsdokumentet.
+`/api/admin/*` kræver de relevante permissions. Endpoints dækker metadata og
+overblik, brugere/roller/status, invitationer, service-tokens, alle
+annotationer, alle læseres progression og auditlog. Secrets returneres kun fra
+det kald, der opretter invitationen eller tokenet.
+`PUT /api/admin/access` gemmer en valideret adgangsprofil, og
+`PUT /api/admin/users/:id/password` nulstiller et password og lukker sessioner.
 
-### `POST /api/annotations`
+## Import og schemaVersion
 
-Opretter en annotation. Serveren tildeler `id`, `bookId`, `createdAt` og
-`updatedAt`.
-
-### `PUT /api/annotations/:id`
-
-Opdaterer kommentar, status, ankertilstand eller mål. Opdateringen valideres
-som en fuld annotation efter sammenfletning med den eksisterende post.
-
-### `DELETE /api/annotations/:id`
-
-Sletter én annotation.
-
-### `GET /api/annotations/export`
-
-Returnerer annotationsdokumentet med en download-filheader.
-
-### `POST /api/annotations/import`
-
-Modtager:
+Annotationsdokumentet bruger schema 3. Schema 1 og 2 migreres eksplicit og atomisk
+til schema 3 ved første læsning eller import. Schema 3 tilføjer `category` og
+udfaldene `accepted`/`rejected`. Ukendte fremtidige schemas
+afvises.
 
 ```json
 {
   "mode": "merge",
   "document": {
-    "schemaVersion": 1,
+    "schemaVersion": 3,
     "bookId": "my-book",
-    "updatedAt": "2026-07-14T12:00:00.000Z",
+    "updatedAt": "2026-07-15T12:00:00.000Z",
     "annotations": []
   }
 }
 ```
 
-`mode` kan være `merge` eller `replace`. Import af en anden bog eller et andet
-schema afvises.
+`mode` kan være `merge` eller `replace`. En anden bog afvises.
 
 ## Sikkerhedsmodel
 
-Serveren er et lokalt redaktionelt værktøj. Den:
+Serveren:
 
 - binder som standard til `127.0.0.1`;
-- binder til `0.0.0.0` inde i Docker-containeren, mens Compose kun publicerer
-  porten på værtens `127.0.0.1`;
-- afviser Host-headere, der ikke er localhost;
-- har ingen CORS-tilladelse;
-- begrænser JSON-requests til 1 MB;
-- validerer alle skrevne annotationsfelter;
-- skriver gennem en midlertidig fil og atomisk rename.
+- binder til `0.0.0.0` i Docker, mens Compose kun publicerer på værtens
+  `127.0.0.1`;
+- afviser ikke-lokale Host-headere;
+- accepterer skrive-origins fra loopback eller den eksplicitte
+  `security.allowedOrigins`-liste;
+- bruger HttpOnly, SameSite=Lax sessionscookies;
+- hasher passwords med Argon2id og session/invitation/token-secrets før
+  lagring;
+- validerer tokenets bog, scopes, udløb og revokering;
+- validerer alle annotationsfelter; og
+- skriver annotations-JSON via midlertidig fil og atomisk rename.
 
-Den er ikke en flerbrugerserver og bør ikke eksponeres gennem en offentlig
-reverse proxy uden en ny autentifikations- og rettighedsmodel.
+SQLite-databasen bruger foreign keys, WAL og eksplicit `user_version`.
+Service-tokens kan sendes som `Authorization: Bearer ...` til HTTP-API'et og er
+påkrævede for Streamable HTTP MCP.

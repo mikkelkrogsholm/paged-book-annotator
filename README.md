@@ -23,8 +23,13 @@ som `/data`. Derfor kan man skifte bog uden at genbygge viewer-imaget.
 - elementannotationer på alle renderede HTML-elementer, også Paged.js-sidehoveder og sidetal;
 - side- og opslagsannotationer;
 - automatisk genforankring og synlig status for uforankrede kommentarer;
-- opret, redigér, løs, genåbn, slet og filtrér;
-- JSON-import og -eksport;
+- syv adgangsprofiler fra helt åben læsning til privat prøvelæsning;
+- lokale konti, åbne eller invitationsbaserede brugerforløb og flere administratorer;
+- attribuerede annotationer med kategori, redaktionel triage, ejerskab, synlighed, moderation og JSON/CSV/Markdown-eksport;
+- læseprogression, der skelner mellem seneste position, engagerede steder og eksplicit færdigmarkering, med fravalg og sletning;
+- admin UI med Share Center, persistente adgangsprofiler, brugere, password-reset, invitationer, triage, tokens og audit;
+- MCP over stdio og Streamable HTTP med scoped, udløbende og revokerbare tokens;
+- struktureret, hemmelighedssikker driftslogging, request-id'er og healthcheck;
 - atomisk lagring gennem en API, der kun lytter på localhost;
 - en manifest- og anchor-kontrakt, som er uafhængig af bogens generator.
 
@@ -37,6 +42,7 @@ docker compose up --build
 ```
 
 Eksempelbogen åbnes på `http://127.0.0.1:4174/preview.html`.
+Administration findes på `http://127.0.0.1:4174/admin`.
 Containerporten publiceres kun på værtens loopback-adresse. Eksempelbundlet
 `./example/book/` mountes read-only, mens `./data/` er det eneste skrivbare
 bind mount.
@@ -72,6 +78,13 @@ Start en anden bog direkte med dens egen konfigurationsfil:
 bun server.mjs --config /absolut/sti/til/book-viewer.config.json
 ```
 
+Opret først en sikker standardkonfiguration direkte i en eksisterende bogmappe:
+
+```sh
+bun run init --book-dir /absolut/sti/til/bog --title "Min bog"
+bun scripts/validate-book-document.mjs /absolut/sti/til/bog/book.html
+```
+
 Til Docker leveres konfigurationen som `book-viewer.json` i roden af det
 mountede bundle. Se `compose.yaml` og `example/book/book-viewer.json`.
 
@@ -84,18 +97,33 @@ selvbærende mappe med et pagineret HTML-dokument, manifest og alle egne assets.
 Vieweren ændrer ikke print-CSS eller den underliggende bog.
 
 Serverens endpoints og sikkerhedsgrænse er beskrevet i
-[Annotations-API](docs/annotations-api.md).
+[Annotations-API](docs/annotations-api.md). Se også
+[adgang, konti og admin](docs/access-and-admin.md), [MCP-laget](docs/mcp.md)
+samt [tests og driftslogging](docs/logging-and-testing.md).
+
+## Backup og restore
+
+Stop serveren før restore. Backup læser et konsistent SQLite-snapshot og pakker
+det sammen med annotationsfilen og en SHA-256-checksum:
+
+```sh
+bun run data backup --config /sti/til/book-viewer.json --out /sikker/sti/bog.pba-backup.json
+bun run data verify --file /sikker/sti/bog.pba-backup.json
+bun run data restore --config /sti/til/book-viewer.json --file /sikker/sti/bog.pba-backup.json --force
+```
 
 ## Udvikling og kontrol
 
 ```sh
 bun run check
+bun run test:server:stability
 bun run validate:example
 bun run validate:bundle example/book
 ```
 
 Kontrollen bruger `Bun.Transpiler` til syntaks og Buns indbyggede test-runner.
-Docker-buildet kører begge kontroller inde i det fastlåste runtime-image.
+Serverens coverage-gate er 80 procent for lines og functions.
+Docker-buildet kører kontrollerne inde i det fastlåste runtime-image.
 
 ## Bun-version
 
@@ -114,6 +142,9 @@ Den anvendte Bun-runtime fremgår også af `/api/config`.
 
 ## Bevidste afgrænsninger
 
-Denne version har ingen brugerkonti, cloud-sync eller samtidig redigering.
-Serveren er et lokalt redaktionelt værktøj og afviser ikke-lokale Host-headere.
-GitHub-publicering og licensvalg foretages separat.
+Der sendes ikke e-mail, og der er ingen social login, realtidssamarbejde eller
+multitenancy. Invitationer leverer et link, som administratoren selv deler.
+Serveren afviser fortsat ikke-lokale Host-headere; offentlig deling kræver en
+TLS-reverse proxy, som sender en lokal upstream-Host, samt den offentlige origin
+i `security.allowedOrigins`. GitHub-publicering, hosting og licensvalg foretages
+separat.

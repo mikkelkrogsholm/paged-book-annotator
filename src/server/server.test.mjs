@@ -22,7 +22,7 @@ test("server exposes config, book assets and persistent annotation CRUD", async 
       navigation: "navigation.xhtml",
       paginationTimeoutMs: 120_000,
     },
-    annotations: { file: "annotations.json" },
+    annotations: { file: "annotations.json" }, logging: { level: "silent" },
   }), "utf8");
 
   const config = await loadBookViewerConfig(configPath);
@@ -36,6 +36,14 @@ test("server exposes config, book assets and persistent annotation CRUD", async 
     assert.equal(publicConfig.book.documentUrl, "/book/book.html");
     assert.equal(publicConfig.book.navigationUrl, "/book/navigation.xhtml");
     assert.equal(publicConfig.book.paginationTimeoutMs, 120_000);
+    assert.equal(publicConfig.access.preset, "local");
+    assert.equal(publicConfig.session.capabilities.canManageUsers, true);
+
+    const adminResponse = await fetch(`${baseUrl}/admin`);
+    assert.equal(adminResponse.status, 200);
+    assert.match(await adminResponse.text(), /Service-tokens/);
+    const metadata = await fetch(`${baseUrl}/api/admin/metadata`).then((response) => response.json());
+    assert.equal(metadata.accessPresets.includes("privateReview"), true);
 
     const bookResponse = await fetch(`${baseUrl}/book/book.html`);
     assert.equal(bookResponse.status, 200);
@@ -54,6 +62,9 @@ test("server exposes config, book assets and persistent annotation CRUD", async 
       body: JSON.stringify({ type: "page", comment: "Afvis mig", target: { pageNumber: 1 } }),
     });
     assert.equal(foreignOriginResponse.status, 403);
+
+    const unauthorizedMcp = await fetch(`${baseUrl}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(unauthorizedMcp.status, 401);
 
     const createdResponse = await fetch(`${baseUrl}/api/annotations`, {
       method: "POST",

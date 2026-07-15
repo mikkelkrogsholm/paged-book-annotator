@@ -19,7 +19,9 @@ konfiguration og stabile attributter i det paginerede HTML-dokument.
     "navigation": "navigation.xhtml",
     "paginationTimeoutMs": 120000
   },
-  "annotations": { "file": "../working/my-book.annotations.json" }
+  "access": { "preset": "privateReview" },
+  "annotations": { "file": "../working/my-book.annotations.json" },
+  "collaboration": { "database": "../working/my-book.collaboration.sqlite" }
 }
 ```
 
@@ -98,7 +100,7 @@ Filen er almindelig JSON:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "bookId": "my-book",
   "updatedAt": "2026-07-14T12:00:00.000Z",
   "annotations": [
@@ -120,7 +122,19 @@ Filen er almindelig JSON:
       },
       "comment": "Gør denne passage mere konkret.",
       "status": "open",
+      "category": "language",
       "anchorState": "attached",
+      "visibility": "reviewGroup",
+      "author": {
+        "id": "user-...",
+        "displayName": "Prøvelæser",
+        "kind": "user"
+      },
+      "updatedBy": {
+        "id": "user-...",
+        "displayName": "Prøvelæser",
+        "kind": "user"
+      },
       "createdAt": "2026-07-14T12:00:00.000Z",
       "updatedAt": "2026-07-14T12:00:00.000Z"
     }
@@ -129,4 +143,9 @@ Filen er almindelig JSON:
 ```
 
 `pageNumber` er en nyttig, men afledt genvej. `scopeId` og tekstselector er de
-egentlige genforankringsmekanismer.
+egentlige genforankringsmekanismer. `visibility` kan være `private`,
+`reviewGroup` eller `public`; adgangsprofilen sætter stadig den øvre grænse for,
+hvilke annotationer en aktør kan hente. `category` er `general`, `language`,
+`structure`, `fact` eller `design`; status er `open`, `resolved`, `accepted`
+eller `rejected`. Eksisterende schema 1- og 2-filer migreres eksplicit til
+schema 3, med den lokale ejer som forfatter for schema 1-data.

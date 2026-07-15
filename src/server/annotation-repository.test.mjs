@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "bun:test";
@@ -44,6 +44,9 @@ test("repository creates, updates, resolves and deletes annotations atomically",
     const created = await repository.create(textDraft());
     assert.equal(created.id, "annotation-fixed");
     assert.equal(created.status, "open");
+    assert.equal(created.author.id, "local-owner");
+    assert.equal(created.visibility, "reviewGroup");
+    assert.equal(created.category, "general");
 
     const updated = await repository.update(created.id, { status: "resolved", comment: "Løst." });
     assert.equal(updated.status, "resolved");
@@ -56,6 +59,44 @@ test("repository creates, updates, resolves and deletes annotations atomically",
 
     assert.equal(await repository.delete(created.id), true);
     assert.equal((await repository.list()).annotations.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("repository attributes annotations and explicitly migrates schema 1 through schema 3", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "book-viewer-migration-"));
+  const filePath = join(directory, "annotations.json");
+  const legacy = {
+    schemaVersion: 1,
+    bookId: "test-book",
+    updatedAt: "2026-07-14T10:00:00.000Z",
+    annotations: [{
+      id: "legacy-note",
+      bookId: "test-book",
+      ...textDraft("Ældre note."),
+      status: "open",
+      anchorState: "attached",
+      createdAt: "2026-07-14T10:00:00.000Z",
+      updatedAt: "2026-07-14T10:00:00.000Z",
+    }],
+  };
+  await writeFile(filePath, `${JSON.stringify(legacy)}\n`);
+  const repository = new AnnotationRepository({ filePath, bookId: "test-book" });
+
+  try {
+    const [migrated, concurrentRead] = await Promise.all([repository.list(), repository.list()]);
+    assert.equal(migrated.schemaVersion, 3);
+    assert.equal(concurrentRead.schemaVersion, 3);
+    assert.equal(migrated.annotations[0].author.id, "local-owner");
+    assert.equal(migrated.annotations[0].visibility, "reviewGroup");
+    assert.equal(migrated.annotations[0].category, "general");
+
+    const created = await repository.create(textDraft("Ny note."), {
+      principal: { kind: "user", id: "user-1", displayName: "Ada" },
+    });
+    assert.deepEqual(created.author, { id: "user-1", displayName: "Ada", kind: "user" });
+    assert.equal(JSON.parse(await readFile(filePath, "utf8")).schemaVersion, 3);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

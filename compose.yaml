@@ -6,6 +6,12 @@ services:
       context: .
     image: paged-book-annotator:dev
     init: true
+    environment:
+      PBA_ADMIN_EMAIL: ${PBA_ADMIN_EMAIL:-}
+      PBA_ADMIN_NAME: ${PBA_ADMIN_NAME:-Administrator}
+      PBA_ADMIN_PASSWORD: ${PBA_ADMIN_PASSWORD:-}
+      PBA_LOG_LEVEL: ${PBA_LOG_LEVEL:-info}
+      PBA_LOG_FORMAT: ${PBA_LOG_FORMAT:-json}
     ports:
       - "127.0.0.1:${PORT:-4174}:4173"
     volumes:

@@ -33,8 +33,17 @@
         <span>Kommentarer</span>
         <strong id="openAnnotationCount">0</strong>
       </button>
+      <a class="admin-link" id="adminLink" href="/admin" hidden>Admin</a>
+      <button class="account-button" id="accountButton" type="button">Log ind</button>
     </div>
   </header>
+
+  <section class="access-gate" id="accessGate" hidden>
+    <span class="identity-mark" aria-hidden="true">L</span>
+    <h1>Log ind for at læse</h1>
+    <p>Denne bog er delt med en afgrænset kreds af læsere.</p>
+    <button class="primary-button" id="gateLoginButton" type="button">Log ind eller acceptér invitation</button>
+  </section>
 
   <main class="reader-shell" id="readerShell" aria-label="Bogviser">
     <div class="reader-bezel">
@@ -198,6 +207,8 @@
         <blockquote id="composerQuote" hidden></blockquote>
       </div>
       <form id="annotationForm">
+        <label for="annotationCategory">Kategori</label>
+        <select id="annotationCategory" name="category"><option value="general">Generel</option><option value="language">Sprog</option><option value="structure">Struktur</option><option value="fact">Fakta</option><option value="design">Design</option></select>
         <label for="annotationComment">Kommentar</label>
         <textarea id="annotationComment" name="comment" rows="8" required placeholder="Hvad skal ændres, undersøges eller bevares?"></textarea>
         <p class="field-help">Kommentaren gemmes sammen med den præcise tekst eller det valgte element.</p>
@@ -211,6 +222,50 @@
   </aside>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog class="auth-dialog" id="authDialog">
+    <form method="dialog" class="auth-dialog-close"><button type="submit" aria-label="Luk">×</button></form>
+    <header>
+      <span>Adgang til bogen</span>
+      <h2 id="authTitle">Log ind</h2>
+    </header>
+    <div class="auth-tabs" role="tablist">
+      <button type="button" data-auth-view="login" aria-pressed="true">Log ind</button>
+      <button type="button" data-auth-view="register" id="registerTab">Opret bruger</button>
+      <button type="button" data-auth-view="invite">Invitation</button>
+      <button type="button" data-auth-view="password" id="accountTab" hidden>Konto</button>
+    </div>
+    <form class="auth-form" id="loginForm" data-auth-form="login">
+      <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary-button" type="submit">Log ind</button>
+    </form>
+    <form class="auth-form" id="registerForm" data-auth-form="register" hidden>
+      <label>Navn<input name="displayName" autocomplete="name" required></label>
+      <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
+      <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <button class="primary-button" type="submit">Opret og fortsæt</button>
+    </form>
+    <form class="auth-form" id="invitationForm" data-auth-form="invite" hidden>
+      <label>Invitationskode<input name="secret" id="invitationSecret" autocomplete="off" required></label>
+      <label>Navn<input name="displayName" autocomplete="name"></label>
+      <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <button class="primary-button" type="submit">Acceptér invitation</button>
+    </form>
+    <form class="auth-form" id="passwordForm" data-auth-form="password" hidden>
+      <label>Nuværende password<input name="currentPassword" type="password" autocomplete="current-password" required></label>
+      <label>Nyt password<input name="newPassword" type="password" autocomplete="new-password" minlength="10" required></label>
+      <button class="primary-button" type="submit">Skift password og log ud</button>
+    </form>
+    <form class="auth-form auth-logout" id="logoutForm" hidden>
+      <p>Du er logget ind som <strong id="accountName"></strong>.</p>
+      <label class="tracking-preference"><input id="readingTrackingToggle" type="checkbox"> Gem min læsestatus</label>
+      <small>Ved fravalg slettes din gemte position og dine registrerede læsesteder.</small>
+      <button class="secondary-button" id="markCompleteButton" type="button">Markér bogen som læst</button>
+      <button class="secondary-button" type="submit">Log ud</button>
+    </form>
+    <p class="form-error" id="authError" role="alert" hidden></p>
+  </dialog>
   <script type="module" src="/main.js"></script>
 </body>
 </html>

@@ -22,8 +22,33 @@ test("viewer shell exposes every control required by the annotation controller",
     "navigationSearch",
     "pageJumpInput",
     "pageScrubber",
+    "annotationCategory",
+    "readingTrackingToggle",
+    "markCompleteButton",
+    "passwordForm",
   ];
   for (const id of requiredIds) assert.match(html, new RegExp(`id="${id}"`));
+});
+
+test("admin share center exposes complete access, secret-copy and triage states", async () => {
+  const html = await readFile(new URL("admin/index.html", publicRoot), "utf8");
+  const controller = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
+  for (const id of ["accessForm", "accessProfile", "capabilityPreview", "readerUrl", "invitationSecret", "annotationFilters", "passwordForm"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(controller, /copy-invitation-link/);
+  assert.match(controller, /save-annotation/);
+  assert.match(controller, /state\.metadata\.accessProfiles/);
+  assert.match(controller, /Ingen annotationer matcher filtrene/);
+});
+
+test("reader progress separates position, engagement, completion and tracking consent", async () => {
+  const main = await readFile(new URL("main.js", publicRoot), "utf8");
+  assert.match(main, /progressPayload\(detail, "position"\)/);
+  assert.match(main, /event: "engaged"/);
+  assert.match(main, /event: "complete"/);
+  assert.match(main, /setPreference/);
+  assert.match(main, /8_000/);
 });
 
 test("viewer navigation is generic and resolves destinations against Paged.js pages", async () => {

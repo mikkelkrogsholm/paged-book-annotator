@@ -17,6 +17,28 @@ Prefer explicit imports and feature-local tests. Do not add a frontend build
 tool or runtime dependency unless the feature cannot reasonably be built with
 the platform APIs already in use.
 
+## Documentation and version discipline
+
+Do not assume that model knowledge about Bun, Paged.js, MCP or any other
+fast-moving platform, runtime, framework, library, protocol or tool is current.
+Before designing or implementing behavior that depends on an API, CLI flag,
+configuration format, compatibility guarantee or platform capability:
+
+- inspect the versions pinned by this repository and the versions actually
+  used by the relevant runtime and deployment;
+- consult current primary sources such as the official documentation,
+  specification, changelog and upstream repository;
+- verify that a capability documented for the latest release also exists in
+  the repository's pinned version before relying on it; and
+- cite or record the version-sensitive assumption in the change summary when
+  it materially affects the implementation.
+
+For Bun, start with the live official documentation index at
+`https://bun.sh/llms.txt` and treat `.bun-version`, `package.json` and the
+Docker image pin as the authority for the version this repository must support.
+Prefer verified platform APIs over new dependencies, but never introduce or
+replace an API solely from memory.
+
 ## Verification
 
 Run before finishing a change:

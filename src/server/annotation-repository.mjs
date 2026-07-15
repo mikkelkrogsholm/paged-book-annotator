@@ -1,10 +1,18 @@
 import { mkdir, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export const ANNOTATION_SCHEMA_VERSION = 1;
+export const ANNOTATION_SCHEMA_VERSION = 3;
 export const ANNOTATION_TYPES = Object.freeze(["text", "element", "page"]);
-export const ANNOTATION_STATUSES = Object.freeze(["open", "resolved"]);
+export const ANNOTATION_STATUSES = Object.freeze(["open", "resolved", "accepted", "rejected"]);
+export const ANNOTATION_CATEGORIES = Object.freeze(["general", "language", "structure", "fact", "design"]);
 export const ANCHOR_STATES = Object.freeze(["attached", "orphaned"]);
+export const ANNOTATION_VISIBILITIES = Object.freeze(["private", "reviewGroup", "public"]);
+
+const DEFAULT_LOCAL_ACTOR = Object.freeze({
+  id: "local-owner",
+  displayName: "Lokal ejer",
+  kind: "local",
+});
 
 function requireString(value, field, { allowEmpty = false } = {}) {
   if (typeof value !== "string" || (!allowEmpty && value.trim().length === 0)) {
@@ -91,13 +99,45 @@ export function validateAnnotationDraft(input) {
     throw new TypeError(`Ukendt ankertilstand: ${anchorState}`);
   }
 
+  const visibility = input.visibility ?? "reviewGroup";
+  if (!ANNOTATION_VISIBILITIES.includes(visibility)) {
+    throw new TypeError(`Ukendt annotationssynlighed: ${visibility}`);
+  }
+
+  const category = input.category ?? "general";
+  if (!ANNOTATION_CATEGORIES.includes(category)) {
+    throw new TypeError(`Ukendt annotationskategori: ${category}`);
+  }
+
   return {
     type,
     target: validateAnnotationTarget(type, input.target),
     comment: requireString(input.comment, "comment"),
     status,
     anchorState,
+    visibility,
+    category,
   };
+}
+
+function validateActor(input, field = "author") {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${field} skal være et aktørobjekt.`);
+  }
+  return {
+    id: requireString(input.id, `${field}.id`),
+    displayName: requireString(input.displayName, `${field}.displayName`),
+    kind: requireString(input.kind, `${field}.kind`),
+  };
+}
+
+function actorFromPrincipal(principal) {
+  if (!principal) return { ...DEFAULT_LOCAL_ACTOR };
+  return validateActor({
+    id: principal.actorUserId ?? principal.id,
+    displayName: principal.displayName ?? principal.email ?? "Ukendt",
+    kind: principal.kind,
+  });
 }
 
 export function validateStoredAnnotation(input, expectedBookId) {
@@ -111,8 +151,33 @@ export function validateStoredAnnotation(input, expectedBookId) {
     id: requireString(input.id, "id"),
     bookId,
     ...draft,
+    author: validateActor(input.author),
+    updatedBy: validateActor(input.updatedBy ?? input.author, "updatedBy"),
     createdAt: requireString(input.createdAt, "createdAt"),
     updatedAt: requireString(input.updatedAt, "updatedAt"),
+  };
+}
+
+export function migrateAnnotationDocument(input, expectedBookId) {
+  if (!input || typeof input !== "object" || input.bookId !== expectedBookId || !Array.isArray(input.annotations)) {
+    throw new TypeError("Annotationsfilen matcher ikke den konfigurerede bog.");
+  }
+  if (input.schemaVersion === ANNOTATION_SCHEMA_VERSION) return input;
+  if (![1, 2].includes(input.schemaVersion)) {
+    throw new TypeError(`Annotationsfilen bruger schema ${input.schemaVersion}; forventede ${ANNOTATION_SCHEMA_VERSION}.`);
+  }
+  const versionTwo = input.schemaVersion === 1 ? {
+    ...input, schemaVersion: 2, annotations: input.annotations.map((annotation) => ({
+      ...annotation,
+      visibility: "reviewGroup",
+      author: { ...DEFAULT_LOCAL_ACTOR },
+      updatedBy: { ...DEFAULT_LOCAL_ACTOR },
+    })),
+  } : input;
+  return {
+    ...versionTwo,
+    schemaVersion: ANNOTATION_SCHEMA_VERSION,
+    annotations: versionTwo.annotations.map((annotation) => ({ ...annotation, category: "general" })),
   };
 }
 
@@ -142,23 +207,20 @@ export class AnnotationRepository {
     const file = Bun.file(this.filePath);
     if (!await file.exists()) return emptyDocument(this.bookId, this.now());
     const parsed = await file.json();
-    if (parsed.schemaVersion !== ANNOTATION_SCHEMA_VERSION) {
-      throw new TypeError(`Annotationsfilen bruger schema ${parsed.schemaVersion}; forventede ${ANNOTATION_SCHEMA_VERSION}.`);
-    }
-    if (parsed.bookId !== this.bookId || !Array.isArray(parsed.annotations)) {
-      throw new TypeError("Annotationsfilen matcher ikke den konfigurerede bog.");
-    }
-    return {
+    const migrated = migrateAnnotationDocument(parsed, this.bookId);
+    const document = {
       schemaVersion: ANNOTATION_SCHEMA_VERSION,
       bookId: this.bookId,
-      updatedAt: requireString(parsed.updatedAt, "updatedAt"),
-      annotations: parsed.annotations.map((annotation) => validateStoredAnnotation(annotation, this.bookId)),
+      updatedAt: requireString(migrated.updatedAt, "updatedAt"),
+      annotations: migrated.annotations.map((annotation) => validateStoredAnnotation(annotation, this.bookId)),
     };
+    if (parsed.schemaVersion !== ANNOTATION_SCHEMA_VERSION) await this.persistDocument(document);
+    return document;
   }
 
   async persistDocument(document) {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
+    const temporaryPath = `${this.filePath}.${Bun.randomUUIDv7()}.tmp`;
     await Bun.write(temporaryPath, `${JSON.stringify(document, null, 2)}\n`);
     await rename(temporaryPath, this.filePath);
     return document;
@@ -173,14 +235,17 @@ export class AnnotationRepository {
     return this.readDocument();
   }
 
-  async create(input) {
+  async create(input, { principal } = {}) {
     return this.enqueueMutation(async () => {
       const document = await this.readDocument();
       const timestamp = this.now();
+      const actor = actorFromPrincipal(principal);
       const annotation = {
         id: this.createId(),
         bookId: this.bookId,
         ...validateAnnotationDraft(input),
+        author: actor,
+        updatedBy: actor,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -191,7 +256,7 @@ export class AnnotationRepository {
     });
   }
 
-  async update(id, input) {
+  async update(id, input, { principal } = {}) {
     return this.enqueueMutation(async () => {
       const document = await this.readDocument();
       const index = document.annotations.findIndex((annotation) => annotation.id === id);
@@ -204,7 +269,7 @@ export class AnnotationRepository {
         target: input.target ?? existing.target,
       });
       const updatedAt = this.now();
-      const annotation = { ...existing, ...candidate, updatedAt };
+      const annotation = { ...existing, ...candidate, updatedBy: actorFromPrincipal(principal), updatedAt };
       document.annotations[index] = annotation;
       document.updatedAt = updatedAt;
       await this.persistDocument(document);
@@ -226,11 +291,8 @@ export class AnnotationRepository {
 
   async importDocument(input, mode = "merge") {
     if (!["merge", "replace"].includes(mode)) throw new TypeError(`Ukendt importtilstand: ${mode}`);
-    if (!input || input.schemaVersion !== ANNOTATION_SCHEMA_VERSION || input.bookId !== this.bookId) {
-      throw new TypeError("Importfilen har forkert schema eller bog-id.");
-    }
-    if (!Array.isArray(input.annotations)) throw new TypeError("Importfilen mangler annotationslisten.");
-    const imported = input.annotations.map((annotation) => validateStoredAnnotation(annotation, this.bookId));
+    const migrated = migrateAnnotationDocument(input, this.bookId);
+    const imported = migrated.annotations.map((annotation) => validateStoredAnnotation(annotation, this.bookId));
     return this.enqueueMutation(async () => {
       const current = mode === "replace" ? emptyDocument(this.bookId, this.now()) : await this.readDocument();
       const byId = new Map(current.annotations.map((annotation) => [annotation.id, annotation]));

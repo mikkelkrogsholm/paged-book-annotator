@@ -13,7 +13,21 @@
     "document": "book.html",
     "navigation": "navigation.xhtml"
   },
+  "access": {
+    "preset": "local"
+  },
   "annotations": {
     "file": "/data/example-book-annotations.json"
+  },
+  "collaboration": {
+    "database": "/data/example-book-collaboration.sqlite"
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  },
+  "mcp": {
+    "enabled": true,
+    "endpoint": "/mcp"
   }
 }
