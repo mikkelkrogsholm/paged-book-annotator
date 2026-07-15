@@ -1,7 +1,7 @@
 # Book bundle-kontrakten
 
-Book Viewer-imaget er generisk og indeholder aldrig en konkret bog. Ved
-kørsel forventer det to mounts:
+Book Viewer-imaget er generisk og indeholder aldrig en konkret bog. Det
+oprindelige single-book setup forventer to mounts:
 
 ```text
 /book  read-only  færdigt bog-bundle
@@ -40,4 +40,11 @@ bun scripts/validate-book-bundle.mjs /absolut/sti/til/bundle
 ```
 
 Bundlevalideringen kontrollerer navigationshierarkiet, alle lokale referencer
-og at hvert navigationslink peger på et stabilt mål i bogdokumentet.
+og at hvert navigationslink peger på et stabilt mål i bogdokumentet. Den afviser
+også links, specialfiler og aktivt indhold.
+
+I et administreret multi-book setup importeres denne mappe eller uploades som
+et `.tar.gz`-arkiv. `book.sourceDir`, `annotations`, `collaboration`, `server` og
+andre procesfelter bruges ikke som en del af det normaliserede indholdsmanifest;
+storage og runtime-konfiguration ejes af installationen. Se
+[`managed-book-catalog.md`](managed-book-catalog.md).
