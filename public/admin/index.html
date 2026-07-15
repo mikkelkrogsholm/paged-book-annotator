@@ -4,74 +4,106 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#141512">
-  <title>Administration · Paged Book Annotator</title>
+  <title>Bibliotek · Paged Book Annotator</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="/"><span id="bookMark">B</span><strong id="bookTitle">Book Admin</strong></a>
+    <a class="brand" href="/admin"><span id="bookMark">PB</span><strong id="bookTitle">Bogbibliotek</strong></a>
+    <label class="book-switcher" for="bookSelector">Aktiv bog<select id="bookSelector" aria-label="Vælg bog"></select></label>
     <nav>
-      <a href="#overview">Overblik</a><a href="#sharing">Deling</a><a href="#users">Brugere</a><a href="#invitations">Invitationer</a>
-      <a href="#annotations">Annotationer</a><a href="#progress">Læsning</a><a href="#tokens">MCP-tokens</a><a href="#audit">Audit</a>
+      <a href="#library">Bibliotek</a><a href="#overview">Overblik</a><a href="#revisions">Upload og revisioner</a>
+      <a href="#sharing">Adgang</a><a href="#users">Brugere</a><a href="#invitations">Invitationer</a>
+      <a href="#access-codes">Adgangskoder</a><a href="#annotations">Annotationer</a><a href="#progress">Læsning</a>
+      <a href="#tokens">MCP-tokens</a><a href="#audit">Audit</a>
     </nav>
-    <a class="reader-link" href="/">← Tilbage til bogen</a>
+    <a class="reader-link" id="readerLink" href="/">← Åbn aktiv bog</a>
   </aside>
   <main>
-    <header class="page-header"><div><span>Administration</span><h1 id="pageTitle">Redaktionelt overblik</h1></div><strong id="adminName"></strong></header>
-    <section class="locked" id="locked" hidden><h2>Administratoradgang kræves</h2><p>Log ind i læseren med en administrator eller brug et admin-token via API/MCP.</p><a href="/">Gå til login</a></section>
+    <header class="page-header"><div><span>Administration</span><h1 id="pageTitle">Bogbibliotek</h1></div><strong id="adminName"></strong></header>
+    <section class="locked" id="locked" hidden><h2>Administratoradgang kræves</h2><p>Log ind med en administrator, eller brug et admin-token via API/MCP.</p><a href="/">Gå til login</a></section>
     <div id="workspace" hidden>
-      <section id="overview"><div class="section-heading"><div><span>Aktiv adgangsprofil</span><h2 id="accessPreset">—</h2></div><p id="accessSummary"></p></div><div class="metric-grid" id="metrics" aria-busy="true"><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div></div></section>
+      <section id="library">
+        <div class="section-heading"><div><span>Administreret indhold</span><h2>Bibliotek</h2></div><p>Hver bog har egne revisioner, læsere, adgangsregler og agenttokens.</p></div>
+        <form class="inline-form create-book-form" id="createBookForm">
+          <input name="title" placeholder="Titel" required maxlength="200">
+          <input name="slug" placeholder="URL-navn (valgfrit)" pattern="[a-z0-9]+(?:-[a-z0-9]+)*">
+          <input name="subtitle" placeholder="Undertitel">
+          <input name="language" value="da" placeholder="Sprog">
+          <button type="submit">Opret bog</button>
+        </form>
+        <div class="book-grid" id="bookGrid" aria-live="polite"></div>
+      </section>
 
-      <section id="sharing"><div class="section-heading"><div><span>Fra bog til reviewlink</span><h2>Deling og adgang</h2></div><p>Vælg en gennemprøvet profil, kontrollér de effektive rettigheder og del derefter det rigtige link.</p></div>
-        <div class="sharing-layout">
-          <form class="settings-form" id="accessForm">
-            <label for="accessProfile">Adgangsprofil</label>
-            <select id="accessProfile" name="preset" required></select>
-            <p class="field-help">Ændringen træder i kraft straks og gemmes i samarbejdsdatabasen.</p>
-            <dl class="capability-preview" id="capabilityPreview"></dl>
-            <p class="form-error" id="accessError" role="alert" hidden></p>
-            <button type="submit">Gem adgangsprofil</button>
+      <div id="bookWorkspace" hidden>
+        <section id="overview"><div class="section-heading"><div><span>Aktiv adgangsprofil</span><h2 id="accessPreset">—</h2></div><p id="accessSummary"></p></div><div class="metric-grid" id="metrics" aria-busy="true"><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div></div></section>
+
+        <section id="revisions">
+          <div class="section-heading"><div><span>Immutable bogbundles</span><h2>Upload og revisioner</h2></div><p>Upload et <code>.tar.gz</code>-bundle. Det valideres i staging og påvirker først læserne, når du publicerer revisionen.</p></div>
+          <form class="upload-panel" id="uploadForm">
+            <label for="bundleFile">Bogbundle<input id="bundleFile" name="bundle" type="file" accept=".tar.gz,application/gzip,application/x-gzip" required></label>
+            <button type="submit">Upload og validér</button>
+            <progress id="uploadProgress" max="100" value="0" hidden></progress>
+            <p id="uploadStatus" class="field-help" aria-live="polite"></p>
           </form>
-          <div class="share-links">
-            <span>Direkte link</span><h3>Læs eller log ind</h3>
-            <p>Det almindelige boglink følger altid den aktive adgangsprofil.</p>
-            <div class="copy-row"><code id="readerUrl"></code><button class="secondary" type="button" data-action="copy-reader-link">Kopiér</button></div>
-            <p class="share-warning" id="shareWarning"></p>
+          <div class="table-wrap"><table><thead><tr><th>Revision</th><th>Bundle</th><th>Validering</th><th>Oprettet</th><th></th></tr></thead><tbody id="revisionsTable"></tbody></table></div>
+        </section>
+
+        <section id="sharing"><div class="section-heading"><div><span>Per-bog policy</span><h2>Deling og adgang</h2></div><p>Læsning og annotering styres per bog. Kontoregistrering giver aldrig automatisk adgang til andre bøger.</p></div>
+          <div class="sharing-layout">
+            <form class="settings-form" id="accessForm">
+              <label for="accessProfile">Adgangsprofil</label><select id="accessProfile" name="preset" required></select>
+              <label for="enrollmentMode">Tilmelding</label><select id="enrollmentMode" name="enrollment"><option value="closed">Lukket</option><option value="invite">Kun invitation</option><option value="code">Adgangskode</option><option value="open">Åben tilmelding</option></select>
+              <p class="field-help">Ændringen træder i kraft med det samme for den valgte bog.</p>
+              <dl class="capability-preview" id="capabilityPreview"></dl><p class="form-error" id="accessError" role="alert" hidden></p><button type="submit">Gem bogens adgang</button>
+            </form>
+            <div class="share-links"><span>Direkte boglink</span><h3>Læs eller log ind</h3><p>Linket følger altid den aktive adgangsprofil.</p><div class="copy-row"><code id="readerUrl"></code><button class="secondary" type="button" data-action="copy-reader-link">Kopiér</button></div><p class="share-warning" id="shareWarning"></p></div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section id="users"><div class="section-heading"><div><span>Identiteter og roller</span><h2>Brugere</h2></div></div>
-        <form class="inline-form" id="createUserForm"><input name="displayName" placeholder="Navn" required><input name="email" type="email" placeholder="E-mail" required><input name="password" type="password" minlength="10" placeholder="Midlertidigt password" required><select name="globalRole"><option value="user">Bruger</option><option value="instance_admin">Administrator</option></select><select name="bookRole"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="book_admin">Bogadministrator</option></select><button type="submit">Opret bruger</button></form>
-        <div class="table-wrap"><table><thead><tr><th>Bruger</th><th>Global rolle</th><th>Bogrolle</th><th>Status</th><th></th></tr></thead><tbody id="usersTable"></tbody></table></div>
-      </section>
+        <section id="users"><div class="section-heading"><div><span>Identitet og per-bog grants</span><h2>Brugere</h2></div><p>Navn og e-mail identificerer feedback. Telefon er valgfri og kræver et angivet formål.</p></div>
+          <form class="profile-form" id="createUserForm">
+            <input name="displayName" placeholder="Navn" required><input name="email" type="email" placeholder="E-mail" required>
+            <input name="phone" type="tel" placeholder="Telefon (valgfri)"><input name="phonePurpose" placeholder="Formål med telefonnummer">
+            <input name="password" type="password" minlength="10" placeholder="Midlertidigt password" required>
+            <select name="globalRole"><option value="user">Bruger</option><option value="instance_admin">Instansadministrator</option></select>
+            <select name="bookRole"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option><option value="publisher">Udgiver</option><option value="book_admin">Bogadministrator</option></select>
+            <button type="submit">Opret og giv adgang</button>
+          </form>
+          <div class="table-wrap"><table><thead><tr><th>Bruger</th><th>Global rolle</th><th>Bogrolle</th><th>Status</th><th></th></tr></thead><tbody id="usersTable"></tbody></table></div>
+        </section>
 
-      <section id="invitations"><div class="section-heading"><div><span>Personlige reviewlinks</span><h2>Invitationer</h2></div><p>Invitationshemmeligheden vises kun én gang. Send linket gennem en kanal, du har tillid til.</p></div>
-        <form class="inline-form compact" id="inviteForm"><input name="displayName" placeholder="Navn" value="Prøvelæser" required><input name="email" type="email" placeholder="E-mail" required><select name="role"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="book_admin">Bogadministrator</option></select><button type="submit">Opret invitation</button></form>
-        <div class="secret-output" id="invitationOutput" hidden><span>Vises kun nu</span><code id="invitationSecret"></code><button class="secondary" type="button" data-action="copy-invitation-link">Kopiér link</button></div><div class="table-wrap"><table><thead><tr><th>E-mail</th><th>Rolle</th><th>Udløber</th><th>Status</th><th></th></tr></thead><tbody id="invitationsTable"></tbody></table></div>
-      </section>
+        <section id="invitations"><div class="section-heading"><div><span>Personlige reviewlinks</span><h2>Invitationer</h2></div><p>Invitationshemmeligheden vises kun én gang og er kun gyldig til den valgte bog.</p></div>
+          <form class="inline-form invite-form" id="inviteForm"><input name="displayName" placeholder="Navn"><input name="email" type="email" placeholder="E-mail" required><select name="role"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option><option value="book_admin">Bogadministrator</option></select><input name="expiresInHours" type="number" min="1" max="8760" value="168" aria-label="Gyldig i timer"><button type="submit">Opret invitation</button></form>
+          <div class="secret-output" id="invitationOutput" hidden><span>Vises kun nu</span><code id="invitationSecret"></code><button class="secondary" type="button" data-action="copy-invitation-link">Kopiér link</button></div>
+          <div class="table-wrap"><table><thead><tr><th>E-mail</th><th>Rolle</th><th>Udløber</th><th>Status</th><th></th></tr></thead><tbody id="invitationsTable"></tbody></table></div>
+        </section>
 
-      <section id="account"><div class="section-heading"><div><span>Konto</span><h2>Skift dit password</h2></div><p>Alle dine eksisterende sessioner lukkes efter ændringen.</p></div>
-        <form class="inline-form password-form" id="passwordForm"><label>Nuværende password<input name="currentPassword" type="password" autocomplete="current-password" required></label><label>Nyt password<input name="newPassword" type="password" minlength="10" autocomplete="new-password" required></label><button type="submit">Skift password</button></form>
-      </section>
+        <section id="access-codes"><div class="section-heading"><div><span>Kontrolleret åben tilmelding</span><h2>Adgangskoder</h2></div><p>Koder kan udløbe, begrænses i antal anvendelser og tilbagekaldes straks.</p></div>
+          <form class="inline-form code-form" id="accessCodeForm"><input name="name" placeholder="Internt navn" required><select name="role"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option></select><input name="maxUses" type="number" min="1" max="10000" value="10" aria-label="Maksimalt antal anvendelser"><input name="expiresInHours" type="number" min="1" max="8760" value="168" aria-label="Gyldig i timer"><button type="submit">Opret kode</button></form>
+          <output class="secret-output" id="accessCodeOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Rolle</th><th>Anvendelser</th><th>Udløber</th><th></th></tr></thead><tbody id="accessCodesTable"></tbody></table></div>
+        </section>
 
-      <section id="annotations"><div class="section-heading"><div><span>Redaktionelt lag</span><h2>Annotationer</h2></div><div class="export-links"><a href="/api/annotations/export?format=json">JSON</a><a href="/api/annotations/export?format=csv">CSV</a><a href="/api/annotations/export?format=markdown">Markdown</a></div></div>
-        <form class="annotation-filters" id="annotationFilters"><label>Søg<input name="query" type="search" placeholder="Kommentar, placering eller forfatter"></label><label>Status<select name="status"><option value="">Alle</option><option value="open">Åben</option><option value="accepted">Accepteret</option><option value="rejected">Afvist</option><option value="resolved">Løst</option></select></label><label>Kategori<select name="category"><option value="">Alle</option><option value="general">Generel</option><option value="language">Sprog</option><option value="structure">Struktur</option><option value="fact">Fakta</option><option value="design">Design</option></select></label></form>
-        <div class="table-wrap"><table><thead><tr><th>Forfatter</th><th>Placering</th><th>Kommentar</th><th>Triage</th><th>Opdateret</th></tr></thead><tbody id="annotationsTable"></tbody></table></div>
-      </section>
+        <section id="account"><div class="section-heading"><div><span>Konto</span><h2>Skift dit password</h2></div><p>Alle dine eksisterende sessioner lukkes efter ændringen.</p></div><form class="inline-form password-form" id="passwordForm"><label>Nuværende password<input name="currentPassword" type="password" autocomplete="current-password" required></label><label>Nyt password<input name="newPassword" type="password" minlength="10" autocomplete="new-password" required></label><button type="submit">Skift password</button></form></section>
 
-      <section id="progress"><div class="section-heading"><div><span>Stabile ankre og sidehints</span><h2>Læseprogression</h2></div></div><div class="table-wrap"><table><thead><tr><th>Læser</th><th>Position</th><th>Fremdrift</th><th>Læste steder</th><th>Senest</th></tr></thead><tbody id="progressTable"></tbody></table></div></section>
+        <section id="annotations"><div class="section-heading"><div><span>Redaktionelt lag</span><h2>Annotationer</h2></div><div class="export-links"><a data-export-format="json" href="#">JSON</a><a data-export-format="csv" href="#">CSV</a><a data-export-format="markdown" href="#">Markdown</a></div></div>
+          <form class="annotation-filters" id="annotationFilters"><label>Søg<input name="query" type="search" placeholder="Kommentar, placering eller forfatter"></label><label>Status<select name="status"><option value="">Alle</option><option value="open">Åben</option><option value="accepted">Accepteret</option><option value="rejected">Afvist</option><option value="resolved">Løst</option></select></label><label>Kategori<select name="category"><option value="">Alle</option><option value="general">Generel</option><option value="language">Sprog</option><option value="structure">Struktur</option><option value="fact">Fakta</option><option value="design">Design</option></select></label></form>
+          <div class="table-wrap"><table><thead><tr><th>Forfatter</th><th>Placering</th><th>Kommentar</th><th>Triage</th><th>Opdateret</th></tr></thead><tbody id="annotationsTable"></tbody></table></div>
+        </section>
 
-      <section id="tokens"><div class="section-heading"><div><span>Agent- og MCP-adgang</span><h2>Service-tokens</h2></div></div>
-        <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" required><button type="submit">Opret token</button></div><fieldset><legend>Rettigheder</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
-        <output class="secret-output" id="tokenOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Prefix</th><th>Rettigheder</th><th>Udløber</th><th></th></tr></thead><tbody id="tokensTable"></tbody></table></div>
-      </section>
+        <section id="progress"><div class="section-heading"><div><span>Stabile ankre og sidehints</span><h2>Læseprogression</h2></div><p>Kun den seneste position og samtykkebaserede læsehændelser vises.</p></div><div class="table-wrap"><table><thead><tr><th>Læser</th><th>Position</th><th>Fremdrift</th><th>Læste steder</th><th>Senest</th></tr></thead><tbody id="progressTable"></tbody></table></div></section>
 
-      <section id="audit"><div class="section-heading"><div><span>Sporbarhed</span><h2>Auditlog</h2></div></div><div class="table-wrap"><table><thead><tr><th>Tid</th><th>Aktør</th><th>Handling</th><th>Ressource</th></tr></thead><tbody id="auditTable"></tbody></table></div></section>
+        <section id="tokens"><div class="section-heading"><div><span>Agent- og MCP-adgang</span><h2>Service-tokens</h2></div><p>Tokenet begrænses til den valgte bog. Instansgrants kræver særskilt administratorpermission.</p></div>
+          <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" required><button type="submit">Opret token</button></div><fieldset><legend>Rettigheder i aktiv bog</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
+          <output class="secret-output" id="tokenOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Prefix</th><th>Bøger og rettigheder</th><th>Udløber</th><th></th></tr></thead><tbody id="tokensTable"></tbody></table></div>
+        </section>
+
+        <section id="audit"><div class="section-heading"><div><span>Sporbarhed</span><h2>Auditlog</h2></div></div><div class="table-wrap"><table><thead><tr><th>Tid</th><th>Aktør</th><th>Handling</th><th>Ressource</th></tr></thead><tbody id="auditTable"></tbody></table></div></section>
+      </div>
     </div>
   </main>
-  <div class="toast" id="toast" hidden></div>
+  <div class="toast" id="toast" hidden role="status"></div>
   <script type="module" src="/admin/admin.js"></script>
 </body>
 </html>

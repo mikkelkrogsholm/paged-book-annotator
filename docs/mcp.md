@@ -1,61 +1,75 @@
 # MCP
 
-MCP-laget bruger den officielle TypeScript SDK 1.29.0 og samme
-`BookCollaboration` som web-API og admin UI. Derfor gælder tokenets scopes,
-bogbinding, udløb, revokering, attribution og audit ens på alle grænser.
+MCP-laget bruger den pinnede officielle TypeScript SDK 1.29.0 og den samme
+service- og rettighedsgrænse som HTTP API'et. SDK 1.x er pr. 15. juli 2026
+fortsat upstreams anbefalede produktionslinje. Projektet bruger SDK'ets
+`ResourceTemplate`, Zod 4-skemaer og `WebStandardStreamableHTTPServerTransport`,
+som er transporten upstream anbefaler til Bun.
+
+Tool-annotations følger MCP's fire standardhints: `readOnlyHint`,
+`destructiveHint`, `idempotentHint` og `openWorldHint`. De hjælper klienten med
+at vise risiko, men er ikke autorisation. Alle grants håndhæves i servicen.
 
 ## Opret token
 
-Åbn `/admin`, vælg **MCP-tokens**, markér de nødvendige permissions og kopiér
-hemmeligheden, når den vises. Databasen gemmer kun dens SHA-256-hash. Et
-admin-token kan blandt andet få `users:read`, `users:invite`, `access:manage`,
-`tokens:manage`, `progress:read:all` og `audit:read`.
+Åbn `/admin`, vælg en bog, gå til **MCP-tokens**, markér permissions og kopiér
+hemmeligheden, når den vises. Databasen gemmer kun dens hash. Tokenet bindes til
+den valgte bog; instansrettigheder gives særskilt.
 
-## Stdio
+## Stdio og Streamable HTTP
+
+Stdio startes som hidtil:
 
 ```sh
 PBA_MCP_TOKEN='pba_...' bun mcp-stdio.mjs \
   --config /absolut/sti/til/book-viewer.json
 ```
 
-En MCP-klient kan bruge `bun` som command og ovenstående fil, `--config` og
-konfigurationsstien som args. Tokenet sættes som miljøvariabel og bør ikke
-skrives i repository-filer.
-
-## Streamable HTTP
-
-Endpointet er som standard `POST /mcp` og bruger stateless Streamable HTTP med
-JSON-respons. Alle kald kræver:
+HTTP bruger som standard stateless `POST /mcp` med JSON-respons og kræver:
 
 ```http
 Authorization: Bearer pba_...
 ```
 
-Endpointet kan ændres eller slås fra med:
+## Bogkontekst
 
-```json
-{ "mcp": { "enabled": true, "endpoint": "/mcp" } }
+Kald `list_books` først. Alle tools, der læser eller ændrer en bog, kræver et
+eksplicit `bookId`. Ressourcer bruger disse URI'er:
+
+```text
+book://{bookId}/metadata
+book://{bookId}/annotations
+book://{bookId}/progress
 ```
 
-Transporten har ingen separat rettighedsmodel. Bearer-tokenet valideres før
-MCP-initialisering, og hvert tool kalder derefter den centrale service.
+Bibliotekstools omfatter `list_books`, `get_book`, `create_book`,
+`list_book_revisions`, `archive_book` og publiceringsflowet nedenfor. De
+eksisterende tekst-, søge-, annotations-, progressions-, invitations- og
+adgangstools er tilsvarende bogspecifikke. Administrationen tilføjer
+`list_book_members` samt opret/list/tilbagekald af adgangskoder.
 
-## Ressourcer og tools
+## Bundle-upload
 
-Ressourcerne udstiller bogmetadata, synlige annotationer og aktørens egen
-læseprogression. Bogtekst læses fra de stabile `data-book-anchor`-elementer;
-sidehints bruges ikke som tekstidentitet. Tools omfatter:
+Binære bundles eller base64 må ikke placeres i MCP-argumenter. Brug dette flow:
 
-- bogkontekst, cursor-pagineret outline, sektionstekst og bogsøgning;
-- filtreret annotationslæsning, annotationens aktuelle tekstkontekst og et
-  cursor-pagineret ændringsfeed siden et ISO-tidspunkt;
-- opret, opdatér, slet og eksportér annotationer;
-- læs og gem progression samt administrativt læseroverblik;
-- list/opret brugere, opdatér adgang og nulstil passwords;
-- læs og skift den persistente adgangsprofil med lockout-beskyttelse;
-- opret/list invitationer;
-- opret/list/revokér service-tokens; og
-- læs auditlog.
+1. `create_book_upload` med `bookId`, `.tar.gz`-filnavn, content type og
+   eventuelt antal bytes.
+2. Upload filen med HTTP `PUT` til det kortlivede `uploadUrl`, som tool'et
+   returnerer.
+3. Kald `validate_book_upload` med `uploadId`.
+4. Kontrollér valideringsrapporten og kald `publish_book_revision` med den
+   validerede `revisionId`.
 
-Tools uden de nødvendige scopes returnerer en autorisationsfejl. Annotationer
-oprettet af en agent tilskrives tokenet eller tokenets valgfrie `actorUserId`.
+Publicering skifter den aktive immutable revision atomisk. `archive_book`,
+annotation deletion, replace-import, invitation/code/token revocation og
+password reset er markeret destruktive. Oprettelse og upload-staging er
+markeret additive; alle list/get/search/export-kald er read-only.
+
+## Primære versionskilder
+
+- MCP TypeScript SDK's officielle v1-kode og versionsnoter:
+  <https://github.com/modelcontextprotocol/typescript-sdk>
+- MCP tools og annotations i specifikationen:
+  <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>
+- Aktuel maintainervejledning om annotations:
+  <https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations/>
