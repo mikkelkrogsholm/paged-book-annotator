@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#141512">
+  <title>Book Viewer</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/viewer.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="identity">
+      <span class="identity-mark" id="bookMark">B</span>
+      <div>
+        <strong id="bookTitle">Book Viewer</strong>
+        <span id="bookSubtitle">Indlæser bog</span>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button class="navigation-panel-button" id="navigationPanelButton" type="button" aria-expanded="false" aria-controls="navigationPanel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/></svg>
+        <span>Indhold</span>
+      </button>
+      <div class="render-status" id="renderStatus" role="status">
+        <i></i>
+        <span>Indlæser bogen</span>
+      </div>
+      <button class="annotation-count-button" id="annotationPanelButton" type="button" aria-expanded="false" aria-controls="annotationPanel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/></svg>
+        <span>Kommentarer</span>
+        <strong id="openAnnotationCount">0</strong>
+      </button>
+    </div>
+  </header>
+
+  <main class="reader-shell" id="readerShell" aria-label="Bogviser">
+    <div class="reader-bezel">
+      <div class="viewport" id="viewport">
+        <iframe id="bookFrame" title="Bog"></iframe>
+        <div class="loading" id="loading" aria-live="polite">
+          <span class="loading-sigil" id="loadingMark">B</span>
+          <p id="loadingMessage">Sætter siderne</p>
+        </div>
+        <button class="page-hit page-hit-prev" id="pageHitPrev" aria-label="Forrige opslag"></button>
+        <button class="page-hit page-hit-next" id="pageHitNext" aria-label="Næste opslag"></button>
+      </div>
+    </div>
+  </main>
+
+  <button class="selection-action" id="selectionAction" type="button" hidden>Kommentér markering</button>
+
+  <nav class="control-shell" aria-label="Bognavigation">
+    <div class="control-island">
+      <button class="nav-button" id="prevButton" type="button" aria-label="Forrige opslag">
+        <span class="icon-well" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg></span>
+        <span class="button-label">Forrige</span>
+      </button>
+
+      <button class="position" id="positionButton" type="button" aria-live="polite" aria-expanded="false" aria-controls="navigationPanel" title="Åbn indholdsfortegnelsen">
+        <strong id="spreadLabel">Bog</strong>
+        <span id="pageLabel">Side</span>
+      </button>
+
+      <button class="nav-button nav-button-next" id="nextButton" type="button" aria-label="Næste opslag">
+        <span class="button-label">Næste</span>
+        <span class="icon-well" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></span>
+      </button>
+
+      <label class="page-scrubber" title="Gå hurtigt til en side">
+        <span class="visually-hidden">Gå til side</span>
+        <input id="pageScrubber" type="range" min="1" max="1" value="1" step="1" disabled>
+      </label>
+
+      <div class="tool-divider" aria-hidden="true"></div>
+
+      <button class="tool-button annotation-tool" id="elementModeButton" type="button" aria-pressed="false" aria-label="Kommentér et element">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v14H5zM9 9h6v6H9z"/></svg>
+        <span>Element</span>
+      </button>
+
+      <button class="tool-button annotation-tool" id="pageAnnotationButton" type="button" aria-label="Kommentér siden eller opslaget">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l3 3v13H6zM15 4v4h4"/></svg>
+        <span>Side</span>
+      </button>
+
+      <div class="zoom-group" aria-label="Zoom">
+        <button id="zoomOutButton" type="button" aria-label="Zoom ud">−</button>
+        <button id="zoomResetButton" type="button" aria-label="Tilpas til vindue"><span id="zoomLabel">Tilpas</span></button>
+        <button id="zoomInButton" type="button" aria-label="Zoom ind">+</button>
+      </div>
+
+      <button class="tool-button" id="fullscreenButton" type="button" aria-label="Fuld skærm">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <aside class="navigation-panel" id="navigationPanel" aria-label="Indholdsfortegnelse" aria-hidden="true">
+    <header class="panel-header">
+      <div>
+        <span>Bogens struktur</span>
+        <h2>Indhold</h2>
+      </div>
+      <button class="panel-close" id="navigationPanelClose" type="button" aria-label="Luk indholdsfortegnelsen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+
+    <div class="navigation-state navigation-loading" id="navigationLoading" role="status">
+      <span></span><span></span><span></span><span></span>
+      <p>Indlæser bogens struktur</p>
+    </div>
+
+    <div class="navigation-state" id="navigationEmpty" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h10"/></svg>
+      <h3>Ingen indholdsfortegnelse</h3>
+      <p>Denne bog kan stadig navigeres side for side.</p>
+    </div>
+
+    <div class="navigation-state navigation-error" id="navigationError" role="alert" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10M12 18v.1"/></svg>
+      <h3>Indholdet kunne ikke læses</h3>
+      <p>Kontrollér bogens navigationsdokument.</p>
+    </div>
+
+    <section class="navigation-browser" id="navigationBrowser" hidden>
+      <form class="page-jump" id="pageJumpForm">
+        <label for="pageJumpInput">Gå direkte til en trykt side</label>
+        <div>
+          <input id="pageJumpInput" type="number" min="1" inputmode="numeric" placeholder="Sidetal">
+          <button type="submit">Gå til</button>
+        </div>
+        <p class="form-error" id="pageJumpError" role="alert" hidden></p>
+      </form>
+
+      <div class="navigation-search-field">
+        <label for="navigationSearch">Søg i indholdet</label>
+        <div>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+          <input id="navigationSearch" type="search" autocomplete="off" placeholder="Titel, vers eller side">
+        </div>
+      </div>
+
+      <div class="navigation-landmarks" id="navigationLandmarks" aria-label="Hurtige steder"></div>
+      <nav class="navigation-outline" aria-label="Bogens indhold">
+        <ol class="navigation-tree" id="navigationTree"></ol>
+        <ol class="navigation-results" id="navigationResults" hidden></ol>
+        <div class="navigation-search-empty" id="navigationSearchEmpty" hidden>
+          <strong>Ingen resultater</strong>
+          <span>Prøv en titel, et versnummer eller et fysisk sidetal.</span>
+        </div>
+      </nav>
+    </section>
+  </aside>
+
+  <aside class="annotation-panel" id="annotationPanel" aria-label="Kommentarer" aria-hidden="true">
+    <header class="panel-header">
+      <div>
+        <span>Redaktionslag</span>
+        <h2>Kommentarer</h2>
+      </div>
+      <button class="panel-close" id="annotationPanelClose" type="button" aria-label="Luk kommentarer">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+
+    <section class="annotation-browser" id="annotationBrowser">
+      <div class="annotation-toolbar">
+        <div class="filter-group" role="group" aria-label="Filtrér kommentarer">
+          <button type="button" data-filter="open" aria-pressed="true">Åbne</button>
+          <button type="button" data-filter="resolved" aria-pressed="false">Løste</button>
+          <button type="button" data-filter="orphaned" aria-pressed="false">Uforankrede</button>
+          <button type="button" data-filter="all" aria-pressed="false">Alle</button>
+        </div>
+        <div class="file-actions">
+          <a href="/api/annotations/export" download>Eksportér</a>
+          <button id="importButton" type="button">Importér</button>
+          <input id="importInput" type="file" accept="application/json,.json" hidden>
+        </div>
+      </div>
+
+      <div class="annotation-empty" id="annotationEmpty">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/></svg>
+        <h3>Ingen kommentarer her</h3>
+        <p>Markér tekst, vælg et element eller kommentér hele siden.</p>
+      </div>
+      <ol class="annotation-list" id="annotationList"></ol>
+    </section>
+
+    <section class="annotation-composer" id="annotationComposer" hidden>
+      <button class="composer-back" id="composerBack" type="button">Tilbage til listen</button>
+      <div class="target-summary">
+        <span id="composerType">Tekst</span>
+        <strong id="composerTarget">Valgt passage</strong>
+        <blockquote id="composerQuote" hidden></blockquote>
+      </div>
+      <form id="annotationForm">
+        <label for="annotationComment">Kommentar</label>
+        <textarea id="annotationComment" name="comment" rows="8" required placeholder="Hvad skal ændres, undersøges eller bevares?"></textarea>
+        <p class="field-help">Kommentaren gemmes sammen med den præcise tekst eller det valgte element.</p>
+        <p class="form-error" id="annotationFormError" role="alert" hidden></p>
+        <div class="composer-actions">
+          <button class="secondary-button" id="cancelAnnotationButton" type="button">Annullér</button>
+          <button class="primary-button" id="saveAnnotationButton" type="submit">Gem kommentar</button>
+        </div>
+      </form>
+    </section>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

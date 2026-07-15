@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="da" data-paged-complete="true" data-paged-total="3">
+<head>
+  <meta charset="utf-8">
+  <title>Eksempelbogen</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #d8d2c6; }
+    body { font-family: Georgia, serif; }
+    .pagedjs_pages { display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 24px; }
+    .pagedjs_page { position: relative; width: 420px; height: 595px; overflow: hidden; background: #f4eee2; color: #1d1d19; }
+    .page-content { height: 100%; padding: 62px 58px; }
+    .page-content h1, .page-content h2 { margin: 0; font-weight: 400; }
+    .page-content h1 { margin-top: 110px; font-size: 46px; }
+    .page-content h2 { margin-top: 65px; font-size: 31px; }
+    .page-content p { margin: 24px 0 0; font-size: 18px; line-height: 1.55; }
+    .page-number { position: absolute; bottom: 28px; color: #8a3d34; font: 12px system-ui, sans-serif; }
+    .left .page-number { left: 34px; }
+    .right .page-number { right: 34px; }
+  </style>
+</head>
+<body data-pre-paginated="true">
+  <main class="pagedjs_pages">
+    <section class="pagedjs_page right">
+      <div class="page-content" data-book-anchor="example.cover" data-book-label="Forside" data-book-page-label="Forside">
+        <h1 data-book-anchor="example.cover.title" data-book-label="Bogens titel">Eksempelbogen</h1>
+        <p data-book-anchor="example.cover.subtitle" data-book-label="Bogens undertitel" data-annotation-text>En lille bog, som viser viewerens kontrakt.</p>
+      </div>
+      <span class="page-number">1</span>
+    </section>
+    <section class="pagedjs_page left">
+      <div class="page-content" data-book-anchor="example.chapter-1" data-book-label="Kapitel 1" data-book-page-label="Kapitel 1">
+        <h2 data-book-anchor="example.chapter-1.title" data-book-label="Kapiteloverskrift">En præcis passage</h2>
+        <p data-book-anchor="example.chapter-1.paragraph-1" data-book-label="Kapitel 1, afsnit 1" data-annotation-text>Denne tekst kan markeres. Kommentaren bliver ved med at finde ordene, selv når afsnittet senere flytter sig.</p>
+      </div>
+      <span class="page-number">2</span>
+    </section>
+    <section class="pagedjs_page right">
+      <div class="page-content" data-book-anchor="example.chapter-1.notes" data-book-label="Eftertanke" data-book-page-label="Kapitel 1">
+        <h2 data-book-anchor="example.chapter-1.notes.title" data-book-label="Eftertankens overskrift">Elementer kan også kommenteres</h2>
+        <p data-book-anchor="example.chapter-1.notes.paragraph-1" data-book-label="Eftertanke, afsnit 1" data-annotation-text>Slå elementtilstand til, og klik på overskriften, afsnittet, sidetallet eller et umærket element.</p>
+        <small>Dette element har intet boganker, men kan stadig kommenteres.</small>
+      </div>
+      <span class="page-number">3</span>
+    </section>
+  </main>
+</body>
+</html>

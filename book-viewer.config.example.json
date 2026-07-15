@@ -1,0 +1,19 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4174
+  },
+  "book": {
+    "id": "example-book",
+    "title": "Eksempelbogen",
+    "subtitle": "En lille bog til afprøvning",
+    "mark": "E",
+    "language": "da",
+    "sourceDir": "example/book",
+    "document": "book.html",
+    "navigation": "navigation.xhtml"
+  },
+  "annotations": {
+    "file": "data/example-book.annotations.json"
+  }
+}

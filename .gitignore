@@ -1,0 +1,5 @@
+data/*.annotations.json
+data/*.tmp
+.DS_Store
+node_modules/
+public/runtime

@@ -1,0 +1,27 @@
+{
+  "name": "paged-book-annotator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first viewer and annotation layer for paged HTML books.",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "assets": "bun scripts/build-runtime-assets.mjs",
+    "start": "bun run assets && bun server.mjs --config book-viewer.config.example.json",
+    "test": "bun test",
+    "validate:example": "bun scripts/validate-book-document.mjs example/book/book.html && bun scripts/validate-navigation-document.mjs example/book/navigation.xhtml example/book/book.html",
+    "validate:bundle": "bun scripts/validate-book-bundle.mjs",
+    "check:version": "bun scripts/check-bun-version.mjs",
+    "check": "bun run check:version && bun scripts/check-syntax.mjs && bun test",
+    "runtime:set": "bun scripts/set-bun-version.mjs",
+    "docker:build": "docker build --pull -t paged-book-annotator:dev .",
+    "docker:start": "docker compose up --build"
+  },
+  "dependencies": {
+    "@fontsource/source-sans-3": "5.2.9",
+    "@fontsource/source-serif-4": "5.2.9"
+  },
+  "engines": {
+    "bun": "1.3.14"
+  }
+}

@@ -1,0 +1,124 @@
+@media screen {
+  html,
+  body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent !important;
+  }
+
+  body {
+    min-width: 0 !important;
+  }
+
+  .pagedjs_pages.reader-root {
+    position: relative;
+    display: block !important;
+    width: 100vw;
+    height: 100vh;
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  .reader-unit {
+    --travel: 28px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: flex;
+    width: var(--unit-width);
+    height: var(--page-height);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -50%) translateX(var(--travel)) scale(var(--reader-scale));
+    transform-origin: center;
+    transition: opacity 520ms cubic-bezier(0.32, 0.72, 0, 1), transform 720ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .reader-unit.is-active {
+    --travel: 0px;
+    z-index: 2;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .reader-unit.enter-from-left { --travel: -28px; }
+  .reader-unit.is-leaving-left { --travel: -22px; opacity: 0; }
+  .reader-unit.is-leaving-right { --travel: 22px; opacity: 0; }
+  .reader-unit.is-single { justify-content: center; }
+
+  .page-slot {
+    position: relative;
+    flex: 0 0 var(--page-width);
+    width: var(--page-width);
+    height: var(--page-height);
+  }
+
+  .page-slot.is-empty { opacity: 0; }
+
+  .reader-unit:not(.is-single)::after {
+    content: "";
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 22px;
+    pointer-events: none;
+    transform: translateX(-50%);
+    background: linear-gradient(90deg, rgba(19, 18, 16, 0.11), transparent 42%, rgba(255, 255, 255, 0.12) 53%, rgba(19, 18, 16, 0.08));
+    mix-blend-mode: multiply;
+  }
+
+  .pagedjs_page {
+    position: relative !important;
+    flex: none !important;
+    margin: 0 !important;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.29) !important;
+  }
+
+  .pagedjs_page,
+  .pagedjs_page * {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+  }
+
+  .page-slot:first-child .pagedjs_page { border-radius: 2px 0 0 2px; }
+  .page-slot:last-child .pagedjs_page { border-radius: 0 2px 2px 0; }
+
+  ::highlight(book-annotations) {
+    color: inherit;
+    background: rgba(219, 177, 73, 0.38);
+    text-decoration: underline;
+    text-decoration-color: rgba(141, 47, 39, 0.62);
+    text-decoration-thickness: 1.5px;
+  }
+
+  [data-viewer-anchor].has-element-annotation {
+    outline: 2px solid rgba(168, 69, 57, 0.72);
+    outline-offset: 3px;
+  }
+
+  .pagedjs_page.has-page-annotation::before {
+    content: "";
+    position: absolute;
+    z-index: 20;
+    top: 7px;
+    right: 7px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #a84539;
+    box-shadow: 0 0 0 4px rgba(168, 69, 57, 0.14);
+  }
+
+  body.is-element-annotation-mode .pagedjs_page {
+    cursor: crosshair;
+  }
+
+  body.is-element-annotation-mode [data-viewer-anchor].is-annotation-hover-target {
+    outline: 2px solid rgba(168, 69, 57, 0.78);
+    outline-offset: 3px;
+    background-color: rgba(168, 69, 57, 0.055);
+  }
+}
