@@ -579,6 +579,12 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
     if (response) return withContextCookie(response, context, config);
   }
   if (pathname.startsWith("/api/")) {
+    if (platform && [
+      "/api/session", "/api/auth/login", "/api/auth/logout", "/api/auth/password", "/api/account/export", "/api/account",
+    ].includes(pathname)) {
+      const response = await apiResponse(request, pathname, url, context, platform, config, { platform });
+      if (response) return withContextCookie(response, context, config);
+    }
     if (platform && pathname === "/api/config" && !activeService) {
       const canAdminister = context.principal?.kind === "local" || context.principal?.globalRole === "instance_admin" || context.principal?.instanceAdmin === true;
       return withContextCookie(jsonResponse(200, {

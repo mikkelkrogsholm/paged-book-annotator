@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 
 import { hasPermission } from "./access-policy.mjs";
 import { AnnotationRepository } from "./annotation-repository.mjs";
-import { ApplicationError, BookCollaboration } from "./application-service.mjs";
+import { ApplicationError, BookCollaboration, principalSummary } from "./application-service.mjs";
 import { BookContentIndex } from "./book-content-index.mjs";
 
 function actorId(principal) {
@@ -218,6 +218,35 @@ export class LibraryApplication {
       if (user) return user;
     }
     return guestId ? { kind: "guest", id: guestId, displayName: "Gæstelæser", bookId } : null;
+  }
+
+  session(principal) {
+    return {
+      principal: principalSummary(principal),
+      capabilities: { canManageUsers: instanceAdministrator(principal), permissions: [] },
+    };
+  }
+
+  async login({ email, password }) {
+    const user = await this.collaboration.authenticate(email, password, null);
+    if (!user) throw new ApplicationError(401, "E-mail eller password er forkert.", "invalid_credentials");
+    const principal = this.collaboration.principalForUser(user.id, null);
+    const session = await this.collaboration.createSession(user.id);
+    this.collaboration.audit({ principal, action: "session.login", resourceType: "session", bookId: null });
+    return { ...session, principal };
+  }
+
+  async logout(sessionSecret, principal) {
+    const revoked = await this.collaboration.revokeSession(sessionSecret);
+    if (revoked) this.collaboration.audit({ principal, action: "session.logout", resourceType: "session", bookId: null });
+    return revoked;
+  }
+
+  async changeOwnPassword(principal, input) {
+    if (principal?.kind !== "user") deny("Log ind som bruger for at ændre password.");
+    const user = await this.collaboration.changePassword(principal.id, input);
+    this.collaboration.audit({ principal, action: "user.password.change", resourceType: "user", resourceId: principal.id, bookId: null });
+    return user;
   }
 
   async acceptAccessCode({ bookId, accessCode, email, displayName, password, phone, phonePurpose }) {

@@ -48,7 +48,7 @@ function assertDelegableBookAccess(principal, bookId, role, permissions = []) {
   }
 }
 
-function principalSummary(principal) {
+export function principalSummary(principal) {
   if (!principal) return null;
   return {
     kind: principal.kind,

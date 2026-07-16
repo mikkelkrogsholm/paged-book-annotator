@@ -21,6 +21,53 @@ async function responseJson(response) {
   return payload;
 }
 
+test("an instance administrator can log in and create the first book in an empty managed library", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pba-empty-managed-http-"));
+  const dataDir = join(root, "data");
+  const configPath = join(root, "config.json");
+  await mkdir(dataDir);
+  await writeFile(configPath, JSON.stringify({
+    server: { host: "127.0.0.1", port: 0 },
+    library: { dataDir, catalogDatabase: join(dataDir, "catalog.sqlite") },
+    collaboration: { database: join(dataDir, "collaboration.sqlite") },
+    access: { preset: "privateReview" },
+    logging: { level: "silent" },
+  }));
+
+  const running = await startBookViewer({ configPath });
+  const base = running.server.url.origin;
+  try {
+    await running.platform.collaboration.ensureBootstrapAdmin({
+      email: "owner@example.test",
+      displayName: "Owner",
+      password: "owner-password",
+    });
+    const emptyConfig = await responseJson(await fetch(`${base}/api/config`));
+    assert.equal(emptyConfig.book, null);
+
+    const loginResponse = await fetch(`${base}/api/auth/login`, jsonRequest("POST", {
+      email: "owner@example.test",
+      password: "owner-password",
+    }));
+    const login = await responseJson(loginResponse);
+    assert.equal(login.principal.globalRole, "instance_admin");
+    assert.equal(login.capabilities.canManageUsers, true);
+    const sessionCookie = loginResponse.headers.get("set-cookie").split(";")[0];
+
+    const initialBooks = await responseJson(await fetch(`${base}/api/admin/books`, { headers: { Cookie: sessionCookie } }));
+    assert.deepEqual(initialBooks.books, []);
+    const created = await responseJson(await fetch(`${base}/api/admin/books`, jsonRequest("POST", {
+      id: "first-book",
+      slug: "first-book",
+      title: "Første bog",
+    }, sessionCookie)));
+    assert.equal(created.book.id, "first-book");
+  } finally {
+    await stopBookViewer(running.server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("managed HTTP library uploads, publishes and isolates a code-enrolled second book", async () => {
   const root = await mkdtemp(join(tmpdir(), "pba-managed-http-"));
   const dataDir = join(root, "data");
