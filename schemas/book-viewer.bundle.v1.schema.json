@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mikkelkrogsholm/paged-book-annotator/blob/main/schemas/book-viewer.bundle.v1.schema.json",
+  "title": "Paged Book Annotator Book Bundle Manifest v1",
+  "description": "The normative content manifest stored as book-viewer.json at the root of a Paged Book Annotator bundle.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "book"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "Exact bundle contract version."
+    },
+    "book": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "document"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,95}$",
+          "description": "Stable lowercase book identity. Must match the target catalog book for revision uploads."
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+        "subtitle": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "\\S" },
+        "mark": { "type": "string", "minLength": 1, "maxLength": 16, "pattern": "\\S" },
+        "language": { "type": "string", "minLength": 2, "maxLength": 35, "pattern": "\\S" },
+        "document": { "$ref": "#/$defs/documentPath" },
+        "navigation": { "$ref": "#/$defs/navigationPath" },
+        "buildId": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" }
+      }
+    }
+  },
+  "$defs": {
+    "bundlePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*\\u0000)(?!.*[?#])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\/$).+$",
+      "description": "Relative POSIX path inside the bundle; no URL delimiters, empty, dot, dot-dot, backslash or absolute segments."
+    },
+    "documentPath": {
+      "allOf": [
+        { "$ref": "#/$defs/bundlePath" },
+        { "pattern": "\\.(?:[Hh][Tt][Mm][Ll]|[Xx][Hh][Tt][Mm][Ll])$" }
+      ]
+    },
+    "navigationPath": {
+      "allOf": [
+        { "$ref": "#/$defs/bundlePath" },
+        { "pattern": "\\.[Xx][Hh][Tt][Mm][Ll]$" }
+      ]
+    }
+  }
+}

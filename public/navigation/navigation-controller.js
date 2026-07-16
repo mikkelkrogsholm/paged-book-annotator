@@ -1,3 +1,5 @@
+import { closeSidePanel, openSidePanel } from "../ui-state.js";
+
 const EPUB_NAMESPACE = "http://www.idpf.org/2007/ops";
 
 function navigationType(element) {
@@ -42,6 +44,7 @@ function parseList(list, parent = null, path = []) {
         row: null,
         branch: null,
         disclosure: null,
+        group: null,
       };
       const nested = directChild(item, "ol");
       if (nested) entry.children = parseList(nested, entry, entry.path);
@@ -111,6 +114,7 @@ export class NavigationController {
     this.landmarks = document.querySelector("#navigationLandmarks");
     this.entries = [];
     this.linkEntries = [];
+    this.returnFocus = null;
     this.bindShellEvents();
   }
 
@@ -141,7 +145,7 @@ export class NavigationController {
     this.reader.addEventListener("pagechange", (event) => this.updateCurrent(event.detail.pageNumbers));
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && this.isOpen()) this.close();
-      if (event.target.matches("textarea, input")) return;
+      if (event.defaultPrevented || event.target?.closest?.("textarea, input, select, button, a, [contenteditable=true]")) return;
       if (event.key.toLocaleLowerCase("da-DK") === "g") {
         event.preventDefault();
         this.open({ focus: "jump" });
@@ -215,7 +219,9 @@ export class NavigationController {
       group.type = "button";
       group.className = "navigation-group-label";
       group.textContent = entry.label;
+      group.setAttribute("aria-expanded", "false");
       group.addEventListener("click", () => this.toggleBranch(entry));
+      entry.group = group;
       row.append(group);
     }
 
@@ -228,9 +234,12 @@ export class NavigationController {
     if (entry.children.length > 0) {
       const branch = document.createElement("ol");
       branch.className = "navigation-branch";
+      branch.id = `navigation-branch-${entry.id.replaceAll(".", "-")}`;
       branch.hidden = true;
       branch.append(...entry.children.map((child) => this.renderEntry(child)));
       entry.branch = branch;
+      entry.disclosure?.setAttribute("aria-controls", branch.id);
+      entry.group?.setAttribute("aria-controls", branch.id);
       item.append(branch);
     }
     return item;
@@ -256,6 +265,7 @@ export class NavigationController {
     entry.branch.hidden = !open;
     entry.disclosure?.setAttribute("aria-expanded", String(open));
     entry.disclosure?.setAttribute("aria-label", `Fold ${entry.label} ${open ? "sammen" : "ud"}`);
+    entry.group?.setAttribute("aria-expanded", String(open));
   }
 
   navigate(entry) {
@@ -331,17 +341,13 @@ export class NavigationController {
   open({ focus = "search" } = {}) {
     if (this.panelButton.disabled) return;
     this.onOpen?.();
-    this.panel.classList.add("is-open");
-    this.panel.setAttribute("aria-hidden", "false");
-    this.panelButton.setAttribute("aria-expanded", "true");
+    this.returnFocus = openSidePanel(this.panel, this.panelButton, this.returnFocus);
     document.querySelector("#positionButton").setAttribute("aria-expanded", "true");
     window.setTimeout(() => (focus === "jump" ? this.jumpInput : this.search).focus(), 80);
   }
 
-  close() {
-    this.panel.classList.remove("is-open");
-    this.panel.setAttribute("aria-hidden", "true");
-    this.panelButton.setAttribute("aria-expanded", "false");
+  close({ restoreFocus = true } = {}) {
+    closeSidePanel(this.panel, this.panelButton, this.returnFocus, { restoreFocus });
     document.querySelector("#positionButton").setAttribute("aria-expanded", "false");
   }
 

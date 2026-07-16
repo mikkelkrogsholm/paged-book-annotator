@@ -1,13 +1,14 @@
-// agent-lint: disable-file=AR002 -- SQLite row-to-DTO mappings intentionally repeat the stable public progress shape.
-import { mkdirSync } from "node:fs";
+// agent-lint: disable-file=AR001,AR002 -- One explicit SQLite transaction boundary keeps schema migration, privacy erasure and cross-feature foreign keys auditable.
+import { chmodSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 
 import { Database } from "bun:sqlite";
 
 import { resolveAccessPolicy, ROLE_PERMISSIONS, validateScopes } from "./access-policy.mjs";
+import { validateSurveyAnswers, validateSurveyDefinition } from "./survey-contract.mjs";
 
-export const COLLABORATION_SCHEMA_VERSION = 3;
+export const COLLABORATION_SCHEMA_VERSION = 4;
 export const USER_ROLES = Object.freeze(["instance_admin", "user"]);
 export const BOOK_ROLES = Object.freeze(["book_admin", "editor", "publisher", "reviewer", "reader"]);
 
@@ -90,6 +91,12 @@ function pseudonymRef(kind, id) {
   return createHash("sha256").update(`${kind}:${id}`).digest("hex");
 }
 
+function respondentIdentity(principal) {
+  if (principal?.actorUserId) return { kind: "user", id: principal.actorUserId, userId: principal.actorUserId };
+  const kind = String(principal?.kind ?? "unknown");
+  return { kind, id: principal?.id, userId: kind === "user" ? principal.id : null };
+}
+
 const SENSITIVE_DETAIL_KEYS = /email|name|phone|password|secret|token|address/i;
 
 function sanitizeAuditDetails(value) {
@@ -98,6 +105,53 @@ function sanitizeAuditDetails(value) {
   return Object.fromEntries(Object.entries(value)
     .filter(([key]) => !SENSITIVE_DETAIL_KEYS.test(key))
     .map(([key, item]) => [key, sanitizeAuditDetails(item)]));
+}
+
+function surveyFromRows(row, versions = []) {
+  if (!row) return null;
+  const mappedVersions = versions.map((version) => ({
+    version: version.version,
+    state: version.state,
+    definition: parseJson(version.definition_json, null),
+    createdAt: version.created_at,
+    publishedAt: version.published_at ?? null,
+  }));
+  const version = (number) => mappedVersions.find((candidate) => candidate.version === number) ?? null;
+  return {
+    id: row.id,
+    bookId: row.book_id,
+    status: row.status,
+    publishedVersion: row.published_version ?? null,
+    draftVersion: row.draft_version ?? null,
+    published: version(row.published_version),
+    draft: version(row.draft_version),
+    versions: mappedVersions,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    publishedAt: row.published_at ?? null,
+    closedAt: row.closed_at ?? null,
+  };
+}
+
+function surveyResponseFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    surveyId: row.survey_id,
+    surveyVersion: row.survey_version,
+    bookId: row.book_id,
+    revisionId: row.revision_id,
+    respondent: {
+      kind: row.respondent_kind,
+      ref: row.respondent_ref,
+      userId: row.user_id ?? null,
+      displayName: row.display_name ?? (row.user_id ? "Slettet bruger" : null),
+    },
+    target: parseJson(row.target_json, {}),
+    answers: parseJson(row.answers_json, []),
+    submittedAt: row.submitted_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 export class CollaborationRepository {
@@ -109,7 +163,10 @@ export class CollaborationRepository {
     sessionHours = 24 * 14,
     invitationHours = 24 * 7,
   }) {
-    if (filePath !== ":memory:") mkdirSync(dirname(filePath), { recursive: true });
+    if (filePath !== ":memory:") {
+      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+      chmodSync(dirname(filePath), 0o700);
+    }
     this.filePath = filePath;
     this.bookId = bookId ?? null;
     this.clock = clock;
@@ -119,6 +176,54 @@ export class CollaborationRepository {
     this.database = new Database(filePath, { create: true, strict: true });
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.migrate();
+    this.secureStorageFiles();
+    this.purgeExpiredCredentials();
+    this.lastCredentialPurgeAt = this.clock().getTime();
+  }
+
+  maybePurgeExpiredCredentials() {
+    const now = this.clock().getTime();
+    if (now - this.lastCredentialPurgeAt < 60 * 60_000) return null;
+    const purged = this.purgeExpiredCredentials();
+    this.lastCredentialPurgeAt = now;
+    return purged;
+  }
+
+  secureStorageFiles() {
+    if (this.filePath === ":memory:") return;
+    for (const path of [this.filePath, `${this.filePath}-wal`, `${this.filePath}-shm`]) {
+      try { chmodSync(path, 0o600); } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+  }
+
+  purgeExpiredCredentials({ graceDays = 30 } = {}) {
+    const days = Number(graceDays);
+    if (!Number.isFinite(days) || days < 0 || days > 3650) throw new TypeError("graceDays skal være mellem 0 og 3650.");
+    const cutoff = new Date(this.clock().getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+    const tableExists = (name) => Boolean(this.database.query(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+    ).get(name));
+    const purge = this.database.transaction(() => {
+      const sessions = tableExists("sessions") ? this.database.query("DELETE FROM sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)").run(cutoff, cutoff).changes : 0;
+      const invitations = tableExists("invitations") ? this.database.query(`
+        DELETE FROM invitations WHERE expires_at < ?
+          OR (revoked_at IS NOT NULL AND revoked_at < ?)
+          OR (accepted_at IS NOT NULL AND accepted_at < ?)
+      `).run(cutoff, cutoff, cutoff).changes : 0;
+      const accessCodes = tableExists("access_codes") ? this.database.query("DELETE FROM access_codes WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)").run(cutoff, cutoff).changes : 0;
+      const tokens = tableExists("service_tokens") ? Number(this.database.query(`
+        SELECT COUNT(*) AS count FROM service_tokens
+        WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)
+      `).get(cutoff, cutoff)?.count ?? 0) : 0;
+      if (tokens > 0) {
+        this.database.query("DELETE FROM service_tokens WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)")
+          .run(cutoff, cutoff);
+      }
+      return { sessions, invitations, accessCodes, tokens };
+    });
+    return purge();
   }
 
   migrate() {
@@ -327,6 +432,52 @@ export class CollaborationRepository {
       this.database.exec("PRAGMA user_version = 3;");
     });
     if (version < 3) migrateVersionThree();
+    const migrateVersionFour = this.database.transaction(() => {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS surveys (
+          id TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          published_version INTEGER,
+          draft_version INTEGER,
+          created_by_ref TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          published_at TEXT,
+          closed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS survey_versions (
+          survey_id TEXT NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+          version INTEGER NOT NULL,
+          book_id TEXT NOT NULL,
+          state TEXT NOT NULL,
+          definition_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          published_at TEXT,
+          PRIMARY KEY (survey_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS survey_responses (
+          id TEXT PRIMARY KEY,
+          survey_id TEXT NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+          survey_version INTEGER NOT NULL,
+          book_id TEXT NOT NULL,
+          revision_id TEXT NOT NULL,
+          respondent_kind TEXT NOT NULL,
+          respondent_ref TEXT NOT NULL,
+          user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          target_json TEXT NOT NULL,
+          answers_json TEXT NOT NULL,
+          submitted_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (survey_id, survey_version, revision_id, respondent_ref)
+        );
+        CREATE INDEX IF NOT EXISTS surveys_book_status ON surveys(book_id, status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS survey_responses_book_survey ON survey_responses(book_id, survey_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS survey_responses_user ON survey_responses(user_id, updated_at DESC);
+        PRAGMA user_version = 4;
+      `);
+    });
+    if (version < 4) migrateVersionFour();
   }
 
   resolveBookId(bookId = this.bookId) {
@@ -397,7 +548,10 @@ export class CollaborationRepository {
   async ensureBootstrapAdmin({ email, displayName = "Administrator", password }) {
     const existing = this.getUserByEmail(email);
     if (existing) {
-      if (existing.globalRole !== "instance_admin") this.setGlobalRole(existing.id, "instance_admin");
+      if (existing.globalRole !== "instance_admin") {
+        await this.changePassword(existing.id, { newPassword: password, requireCurrent: false });
+        this.setGlobalRole(existing.id, "instance_admin");
+      }
       return this.getUser(existing.id);
     }
     return this.createUser({
@@ -468,10 +622,28 @@ export class CollaborationRepository {
     return this.database.query(`
       SELECT users.id, users.email, users.display_name, users.global_role, users.status,
              users.created_at, users.updated_at, users.erased_at,
-             memberships.book_id, memberships.role AS book_role, memberships.permissions_json
-      FROM users LEFT JOIN memberships ON memberships.user_id = users.id AND memberships.book_id = ?
+             memberships.book_id, memberships.role AS book_role, memberships.permissions_json,
+             book_reviewer_profiles.phone, book_reviewer_profiles.phone_purpose,
+             book_reviewer_profiles.created_at AS profile_created_at,
+             book_reviewer_profiles.updated_at AS profile_updated_at
+      FROM users JOIN memberships ON memberships.user_id = users.id AND memberships.book_id = ?
+      LEFT JOIN book_reviewer_profiles ON book_reviewer_profiles.user_id = users.id
+        AND book_reviewer_profiles.book_id = memberships.book_id
       ORDER BY users.display_name COLLATE NOCASE, users.email
-    `).all(resolvedBookId).map((row) => ({ ...userFromRow(row), membership: membershipFromRow(row) }));
+    `).all(resolvedBookId).map((row) => ({
+      ...userFromRow(row),
+      membership: membershipFromRow(row),
+      phone: row.phone ?? null,
+      phonePurpose: row.phone_purpose ?? null,
+      reviewerProfile: row.profile_created_at ? {
+        userId: row.id,
+        bookId: row.book_id,
+        phone: row.phone ?? null,
+        phonePurpose: row.phone_purpose ?? null,
+        createdAt: row.profile_created_at,
+        updatedAt: row.profile_updated_at,
+      } : null,
+    }));
   }
 
   activeAdministratorCount() {
@@ -531,6 +703,7 @@ export class CollaborationRepository {
   }
 
   async createSession(userId) {
+    this.maybePurgeExpiredCredentials();
     const user = this.getUser(userId);
     if (!user || user.status !== "active") throw new TypeError("Brugeren kan ikke logge ind.");
     const id = this.createId("session");
@@ -581,6 +754,7 @@ export class CollaborationRepository {
     bookId = this.bookId,
     createdBy = null,
   }) {
+    this.maybePurgeExpiredCredentials();
     if (!BOOK_ROLES.includes(role)) throw new TypeError(`Ukendt bogrolle: ${role}`);
     const resolvedBookId = this.resolveBookId(bookId);
     const validatedPermissions = validateScopes(permissions, { allowEmpty: true });
@@ -647,7 +821,7 @@ export class CollaborationRepository {
     return result.changes > 0;
   }
 
-  async acceptInvitation({ secret, displayName, password, userId = null, bookId = this.bookId }) {
+  async pendingInvitation(secret, bookId = this.bookId) {
     const timestamp = nowIso(this.clock);
     const resolvedBookId = this.resolveBookId(bookId);
     const invitation = this.database.query(`
@@ -655,32 +829,56 @@ export class CollaborationRepository {
       WHERE secret_hash = ? AND book_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
     `).get(await hashSecret(secret), resolvedBookId, timestamp);
     if (!invitation) throw new TypeError("Invitationen er ugyldig eller udløbet.");
-    let user = userId ? this.getUser(userId, null) : this.getUserByEmail(invitation.email);
-    if (userId && user?.email !== invitation.email) throw new TypeError("Invitationen tilhører en anden konto.");
+    return invitation;
+  }
+
+  claimInvitation(invitation, user) {
+    const accept = this.database.transaction(() => {
+      const claimTime = nowIso(this.clock);
+      const claimed = this.database.query(`
+        UPDATE invitations SET accepted_at = ?, accepted_by_user_id = ?
+        WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+      `).run(claimTime, user.id, invitation.id, claimTime);
+      if (claimed.changes !== 1) throw new TypeError("Invitationen er allerede anvendt eller udløbet.");
+      this.setMembership(user.id, invitation.role, {
+        bookId: invitation.book_id,
+        permissions: parseJson(invitation.permissions_json, []),
+      });
+    });
+    accept();
+    return this.getUser(user.id, invitation.book_id);
+  }
+
+  async acceptInvitation({ secret, displayName, password, bookId = this.bookId }) {
+    const invitation = await this.pendingInvitation(secret, bookId);
+    let user = this.getUserByEmail(invitation.email);
+    let createdUser = false;
     if (!user) {
       user = await this.createUser({
         email: invitation.email,
         displayName: displayName || invitation.display_name,
         password,
       });
-    } else if (!userId) {
+      createdUser = true;
+    } else {
       if (!await this.authenticate(invitation.email, password, null)) {
         throw new TypeError("Den eksisterende bruger kræver sit korrekte password.");
       }
     }
-    const accept = this.database.transaction(() => {
-      const claimed = this.database.query(`
-        UPDATE invitations SET accepted_at = ?, accepted_by_user_id = ?
-        WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL
-      `).run(timestamp, user.id, invitation.id);
-      if (claimed.changes !== 1) throw new TypeError("Invitationen er allerede anvendt.");
-      this.setMembership(user.id, invitation.role, {
-        bookId: resolvedBookId,
-        permissions: parseJson(invitation.permissions_json, []),
-      });
-    });
-    accept();
-    return this.getUser(user.id, resolvedBookId);
+    try {
+      return this.claimInvitation(invitation, user);
+    } catch (error) {
+      if (createdUser) this.discardUnenrolledUser(user.id);
+      throw error;
+    }
+  }
+
+  async acceptInvitationForAuthenticatedUser({ secret, userId, bookId = this.bookId }) {
+    const invitation = await this.pendingInvitation(secret, bookId);
+    const user = this.getUser(userId, null);
+    if (!user || user.status !== "active") throw new TypeError("Kontoen kan ikke tilmeldes.");
+    if (user.email !== invitation.email) throw new TypeError("Invitationen tilhører en anden konto.");
+    return this.claimInvitation(invitation, user);
   }
 
   async createAccessCode({
@@ -692,6 +890,7 @@ export class CollaborationRepository {
     maxUses = 1,
     createdBy = null,
   }) {
+    this.maybePurgeExpiredCredentials();
     if (!BOOK_ROLES.includes(role)) throw new TypeError(`Ukendt bogrolle: ${role}`);
     const resolvedBookId = this.resolveBookId(bookId);
     const validatedPermissions = validateScopes(permissions, { allowEmpty: true });
@@ -777,7 +976,7 @@ export class CollaborationRepository {
       if (policy.registration !== "inviteOnly") {
         throw new TypeError("Invitationstilmelding er ikke aktiveret for bogen.");
       }
-      return this.acceptInvitation({ secret: invitationSecret, userId, bookId: resolvedBookId });
+      return this.acceptInvitationForAuthenticatedUser({ secret: invitationSecret, userId, bookId: resolvedBookId });
     }
     if (method === "code") {
       if (policy.registration !== "code") throw new TypeError("Kodetilmelding er ikke aktiveret for bogen.");
@@ -807,6 +1006,38 @@ export class CollaborationRepository {
     return this.setMembership(userId, "reader", { bookId: resolvedBookId });
   }
 
+  async validateAccessCode(accessCode, bookId = this.bookId) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const policy = this.getAccessPolicy({ preset: "publicRead" }, resolvedBookId);
+    if (policy.registration !== "code") throw new TypeError("Kodetilmelding er ikke aktiveret for bogen.");
+    const row = this.database.query(`
+      SELECT id, role, permissions_json, expires_at, max_uses, use_count
+      FROM access_codes
+      WHERE secret_hash = ? AND book_id = ? AND revoked_at IS NULL
+        AND expires_at > ? AND use_count < max_uses
+    `).get(await hashSecret(accessCode), resolvedBookId, nowIso(this.clock));
+    if (!row) throw new TypeError("Adgangskoden er ugyldig eller udløbet.");
+    return {
+      id: row.id,
+      bookId: resolvedBookId,
+      role: row.role,
+      permissions: parseJson(row.permissions_json, []),
+      expiresAt: row.expires_at,
+      maxUses: row.max_uses,
+      useCount: row.use_count,
+    };
+  }
+
+  discardUnenrolledUser(userId) {
+    const result = this.database.query(`
+      DELETE FROM users
+      WHERE id = ?
+        AND NOT EXISTS (SELECT 1 FROM memberships WHERE memberships.user_id = users.id)
+        AND NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.user_id = users.id)
+    `).run(userId);
+    return result.changes > 0;
+  }
+
   async createServiceToken({
     name,
     actorUserId = null,
@@ -817,6 +1048,7 @@ export class CollaborationRepository {
     expiresInHours = 24 * 30,
     createdBy = null,
   }) {
+    this.maybePurgeExpiredCredentials();
     if (typeof instanceAdmin !== "boolean") throw new TypeError("instanceAdmin skal være boolesk.");
     const normalizedGrants = grants
       ? grants.map((grant) => ({
@@ -914,7 +1146,7 @@ export class CollaborationRepository {
     };
   }
 
-  listServiceTokens(bookId = this.bookId) {
+  listServiceTokens(bookId = this.bookId, { includeInstanceAdmin = false, includeAllBookGrants = false } = {}) {
     const resolvedBookId = this.optionalBookId(bookId);
     const rows = this.database.query(`
       SELECT id, name, prefix, actor_user_id, book_id, scopes_json, instance_admin,
@@ -944,18 +1176,24 @@ export class CollaborationRepository {
         lastUsedAt: row.last_used_at,
         revokedAt: row.revoked_at,
       };
-    }).filter((token) => !resolvedBookId
-      || token.instanceAdmin
-      || token.bookGrants.some((grant) => grant.bookId === resolvedBookId));
+    }).filter((token) => {
+      if (token.instanceAdmin) return includeInstanceAdmin;
+      if (!resolvedBookId) return includeAllBookGrants;
+      return token.bookGrants.some((grant) => grant.bookId === resolvedBookId);
+    });
   }
 
-  revokeServiceToken(id, bookId = this.bookId) {
+  revokeServiceToken(id, bookId = this.bookId, { allowInstanceAdmin = false, allowGlobal = false } = {}) {
     const resolvedBookId = this.optionalBookId(bookId);
-    const allowed = !resolvedBookId || Boolean(this.database.query(`
-      SELECT 1 FROM service_tokens
-      LEFT JOIN service_token_book_grants ON service_token_book_grants.token_id = service_tokens.id
-      WHERE service_tokens.id = ? AND (service_tokens.instance_admin = 1 OR service_token_book_grants.book_id = ?)
-    `).get(id, resolvedBookId));
+    let allowed = !resolvedBookId && allowGlobal;
+    if (resolvedBookId) {
+      const row = this.database.query("SELECT instance_admin FROM service_tokens WHERE id = ?").get(id);
+      allowed = Boolean(row) && (Boolean(row.instance_admin)
+        ? allowInstanceAdmin
+        : Boolean(this.database.query(`
+          SELECT 1 FROM service_token_book_grants WHERE token_id = ? AND book_id = ?
+        `).get(id, resolvedBookId)));
+    }
     if (!allowed) return false;
     const result = this.database.query("UPDATE service_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
       .run(nowIso(this.clock), id);
@@ -1129,6 +1367,188 @@ export class CollaborationRepository {
     };
   }
 
+  survey(id, bookId = this.bookId) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const row = this.database.query("SELECT * FROM surveys WHERE id = ? AND book_id = ?").get(id, resolvedBookId);
+    if (!row) return null;
+    const versions = this.database.query(`
+      SELECT * FROM survey_versions WHERE survey_id = ? AND book_id = ? ORDER BY version
+    `).all(id, resolvedBookId);
+    return surveyFromRows(row, versions);
+  }
+
+  listSurveys(bookId = this.bookId, { includeClosed = true } = {}) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const rows = includeClosed
+      ? this.database.query("SELECT * FROM surveys WHERE book_id = ? ORDER BY updated_at DESC").all(resolvedBookId)
+      : this.database.query("SELECT * FROM surveys WHERE book_id = ? AND status != 'closed' ORDER BY updated_at DESC").all(resolvedBookId);
+    return rows.map((row) => surveyFromRows(row, this.database.query(`
+      SELECT * FROM survey_versions WHERE survey_id = ? AND book_id = ? ORDER BY version
+    `).all(row.id, resolvedBookId)));
+  }
+
+  listActiveSurveys(bookId = this.bookId, revisionId = null) {
+    return this.listSurveys(bookId, { includeClosed: false })
+      .filter((survey) => survey.status === "published" && survey.published)
+      .filter((survey) => !revisionId || survey.published.definition.target.revisionId === revisionId)
+      .map((survey) => ({ ...survey, draft: null, versions: [survey.published] }));
+  }
+
+  createSurvey({ bookId = this.bookId, definition, principal = null }) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const normalized = validateSurveyDefinition(definition);
+    const timestamp = nowIso(this.clock);
+    const id = this.createId("survey");
+    const createdByRef = pseudonymRef(principal?.kind ?? "system", principal?.id ?? "system");
+    const create = this.database.transaction(() => {
+      this.database.query(`
+        INSERT INTO surveys (
+          id, book_id, status, published_version, draft_version, created_by_ref,
+          created_at, updated_at, published_at, closed_at
+        ) VALUES (?, ?, 'draft', NULL, 1, ?, ?, ?, NULL, NULL)
+      `).run(id, resolvedBookId, createdByRef, timestamp, timestamp);
+      this.database.query(`
+        INSERT INTO survey_versions (
+          survey_id, version, book_id, state, definition_json, created_at, published_at
+        ) VALUES (?, 1, ?, 'draft', ?, ?, NULL)
+      `).run(id, resolvedBookId, JSON.stringify(normalized), timestamp);
+    });
+    create();
+    return this.survey(id, resolvedBookId);
+  }
+
+  updateSurveyDraft(id, definition, bookId = this.bookId) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const survey = this.survey(id, resolvedBookId);
+    if (!survey) return null;
+    if (survey.status === "closed") throw new TypeError("En lukket survey kan ikke redigeres.");
+    const normalized = validateSurveyDefinition(definition);
+    const timestamp = nowIso(this.clock);
+    const draftVersion = survey.draftVersion ?? ((survey.publishedVersion ?? 0) + 1);
+    const save = this.database.transaction(() => {
+      this.database.query(`
+        INSERT INTO survey_versions (survey_id, version, book_id, state, definition_json, created_at, published_at)
+        VALUES (?, ?, ?, 'draft', ?, ?, NULL)
+        ON CONFLICT(survey_id, version) DO UPDATE SET definition_json = excluded.definition_json
+      `).run(id, draftVersion, resolvedBookId, JSON.stringify(normalized), timestamp);
+      this.database.query(`
+        UPDATE surveys SET draft_version = ?, updated_at = ? WHERE id = ? AND book_id = ?
+      `).run(draftVersion, timestamp, id, resolvedBookId);
+    });
+    save();
+    return this.survey(id, resolvedBookId);
+  }
+
+  publishSurvey(id, { bookId = this.bookId, revisionId }) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const survey = this.survey(id, resolvedBookId);
+    if (!survey) return null;
+    if (survey.status === "closed") throw new TypeError("En lukket survey kan ikke publiceres.");
+    if (!survey.draft) throw new TypeError("Surveyen har ingen kladde at publicere.");
+    const revision = requireText(revisionId, "revisionId");
+    const definition = validateSurveyDefinition({
+      ...survey.draft.definition,
+      target: { ...survey.draft.definition.target, revisionId: revision },
+    });
+    const timestamp = nowIso(this.clock);
+    const publish = this.database.transaction(() => {
+      if (survey.publishedVersion) {
+        this.database.query("UPDATE survey_versions SET state = 'superseded' WHERE survey_id = ? AND version = ?")
+          .run(id, survey.publishedVersion);
+      }
+      this.database.query(`
+        UPDATE survey_versions SET state = 'published', definition_json = ?, published_at = ?
+        WHERE survey_id = ? AND version = ? AND book_id = ?
+      `).run(JSON.stringify(definition), timestamp, id, survey.draftVersion, resolvedBookId);
+      this.database.query(`
+        UPDATE surveys SET status = 'published', published_version = ?, draft_version = NULL,
+          published_at = ?, closed_at = NULL, updated_at = ? WHERE id = ? AND book_id = ?
+      `).run(survey.draftVersion, timestamp, timestamp, id, resolvedBookId);
+    });
+    publish();
+    return this.survey(id, resolvedBookId);
+  }
+
+  closeSurvey(id, bookId = this.bookId) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const survey = this.survey(id, resolvedBookId);
+    if (!survey) return null;
+    const timestamp = nowIso(this.clock);
+    this.database.query(`
+      UPDATE surveys SET status = 'closed', draft_version = NULL, closed_at = ?, updated_at = ?
+      WHERE id = ? AND book_id = ?
+    `).run(timestamp, timestamp, id, resolvedBookId);
+    this.database.query("DELETE FROM survey_versions WHERE survey_id = ? AND state = 'draft'").run(id);
+    return this.survey(id, resolvedBookId);
+  }
+
+  getSurveyResponse({ surveyId, surveyVersion, revisionId, principal, bookId = this.bookId }) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const identity = respondentIdentity(principal);
+    if (!identity.id) return null;
+    const respondentRef = pseudonymRef(identity.kind, identity.id);
+    const row = this.database.query(`
+      SELECT survey_responses.*, users.display_name FROM survey_responses
+      LEFT JOIN users ON users.id = survey_responses.user_id
+      WHERE survey_id = ? AND survey_version = ? AND revision_id = ?
+        AND respondent_ref = ? AND survey_responses.book_id = ?
+    `).get(surveyId, surveyVersion, revisionId, respondentRef, resolvedBookId);
+    return surveyResponseFromRow(row);
+  }
+
+  submitSurveyResponse({ surveyId, answers, revisionId, principal, bookId = this.bookId }) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const identity = respondentIdentity(principal);
+    if (!identity.id) throw new TypeError("Surveybesvarelsen kræver en stabil identitet.");
+    const survey = this.survey(surveyId, resolvedBookId);
+    if (!survey || survey.status !== "published" || !survey.published) throw new TypeError("Surveyen er ikke aktiv.");
+    const revision = requireText(revisionId, "revisionId");
+    if (survey.published.definition.target.revisionId !== revision) {
+      throw new TypeError("Surveyen hører til en anden bogrevision.");
+    }
+    const normalizedAnswers = validateSurveyAnswers(survey.published.definition, answers);
+    const timestamp = nowIso(this.clock);
+    const respondentKind = identity.kind;
+    const respondentRef = pseudonymRef(respondentKind, identity.id);
+    const userId = identity.userId;
+    const existing = this.getSurveyResponse({
+      surveyId, surveyVersion: survey.publishedVersion, revisionId: revision, principal, bookId: resolvedBookId,
+    });
+    const id = existing?.id ?? this.createId("survey-response");
+    this.database.query(`
+      INSERT INTO survey_responses (
+        id, survey_id, survey_version, book_id, revision_id, respondent_kind,
+        respondent_ref, user_id, target_json, answers_json, submitted_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(survey_id, survey_version, revision_id, respondent_ref) DO UPDATE SET
+        answers_json = excluded.answers_json, target_json = excluded.target_json,
+        user_id = excluded.user_id, updated_at = excluded.updated_at
+    `).run(
+      id, surveyId, survey.publishedVersion, resolvedBookId, revision, respondentKind,
+      respondentRef, userId, JSON.stringify(survey.published.definition.target),
+      JSON.stringify(normalizedAnswers), timestamp, timestamp,
+    );
+    return this.getSurveyResponse({
+      surveyId, surveyVersion: survey.publishedVersion, revisionId: revision, principal, bookId: resolvedBookId,
+    });
+  }
+
+  listSurveyResponses(bookId = this.bookId, { surveyId = null } = {}) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const rows = surveyId
+      ? this.database.query(`
+          SELECT survey_responses.*, users.display_name FROM survey_responses
+          LEFT JOIN users ON users.id = survey_responses.user_id
+          WHERE survey_responses.book_id = ? AND survey_id = ? ORDER BY updated_at DESC
+        `).all(resolvedBookId, surveyId)
+      : this.database.query(`
+          SELECT survey_responses.*, users.display_name FROM survey_responses
+          LEFT JOIN users ON users.id = survey_responses.user_id
+          WHERE survey_responses.book_id = ? ORDER BY updated_at DESC
+        `).all(resolvedBookId);
+    return rows.map(surveyResponseFromRow);
+  }
+
   exportUserData(userId) {
     const user = this.getUser(userId, null);
     if (!user) throw new TypeError("Brugeren findes ikke.");
@@ -1188,7 +1608,12 @@ export class CollaborationRepository {
       details: parseJson(row.details_json, {}),
       createdAt: row.created_at,
     }));
-    return { user, memberships, reviewerProfiles, progress, pageVisits, auditEvents };
+    const surveyResponses = this.database.query(`
+      SELECT survey_responses.*, users.display_name FROM survey_responses
+      LEFT JOIN users ON users.id = survey_responses.user_id
+      WHERE survey_responses.user_id = ? ORDER BY survey_responses.updated_at
+    `).all(userId).map(surveyResponseFromRow);
+    return { user, memberships, reviewerProfiles, progress, pageVisits, surveyResponses, auditEvents };
   }
 
   eraseUserData(userId) {
@@ -1206,6 +1631,7 @@ export class CollaborationRepository {
       this.database.query("DELETE FROM reading_preferences WHERE user_id = ?").run(userId);
       this.database.query("DELETE FROM reading_progress WHERE user_id = ?").run(userId);
       this.database.query("DELETE FROM reading_page_visits WHERE user_id = ?").run(userId);
+      this.database.query("DELETE FROM survey_responses WHERE user_id = ?").run(userId);
       this.database.query("DELETE FROM invitations WHERE email = ?").run(user.email);
       this.database.query("UPDATE service_tokens SET actor_user_id = NULL WHERE actor_user_id = ?").run(userId);
       this.database.query(`
@@ -1277,6 +1703,22 @@ export class CollaborationRepository {
       bookId: row.book_id,
       details: parseJson(row.details_json, {}),
       createdAt: row.created_at,
+    }));
+  }
+
+  listAnnotationDeletionsSince(since, bookId = this.bookId) {
+    const resolvedBookId = this.resolveBookId(bookId);
+    const timestamp = new Date(since);
+    if (Number.isNaN(timestamp.getTime())) throw new TypeError("since skal være et gyldigt tidspunkt.");
+    return this.database.query(`
+      SELECT id, resource_id, created_at FROM audit_events
+      WHERE book_id = ? AND action = 'annotation.delete' AND resource_type = 'annotation'
+        AND created_at > ?
+      ORDER BY created_at, id
+    `).all(resolvedBookId, timestamp.toISOString()).map((row) => ({
+      eventId: row.id,
+      annotationId: row.resource_id,
+      changedAt: row.created_at,
     }));
   }
 

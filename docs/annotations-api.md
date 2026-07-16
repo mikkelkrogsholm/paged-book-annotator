@@ -26,8 +26,19 @@ filtrerer både UI-, API- og MCP-resultater.
   ankre.
 - `GET|PUT /api/progress/preferences` — læserens trackingvalg; fravalg sletter
   gemt progress og besøg.
+- `GET /api/surveys` og `GET /api/surveys/:id` — aktive surveys for bogens
+  publicerede revision.
+- `GET|PUT /api/surveys/:id/response` — læserens ene versionerede svar.
+- I managed multi-book-mode ligger de samme reader-ruter under
+  `/api/books/:bookId/*`.
 
 JSON-requests er begrænset til 1 MB.
+
+En annotation må højst have 16.384 tegn i kommentaren, 65.536 i det eksakte
+tekstcitat, 2.048 i hver selector-kontekst, 512 i scope/label, 256 i id'er og
+200 i visningsnavne. En bog kan højst have 10.000 annotationer og et samlet
+annotationsdokument på 32 MiB. Offentlige mutationer har desuden en
+IP-baseret minutgrænse; login- og registreringskald har en strammere grænse.
 
 ## Admin-endpoints
 
@@ -37,19 +48,24 @@ annotationer, alle læseres progression og auditlog. Secrets returneres kun fra
 det kald, der opretter invitationen eller tokenet.
 `PUT /api/admin/access` gemmer en valideret adgangsprofil, og
 `PUT /api/admin/users/:id/password` nulstiller et password og lukker sessioner.
+Surveyadministration bruger `GET|POST /api/admin/surveys`,
+`PUT /api/admin/surveys/:id`, `POST /api/admin/surveys/:id/publish|close`,
+`GET /api/admin/survey-responses` og `GET /api/admin/review-export`. I managed
+mode indsættes `/books/:bookId` efter `/api/admin`.
 
 ## Import og schemaVersion
 
-Annotationsdokumentet bruger schema 3. Schema 1 og 2 migreres eksplicit og atomisk
-til schema 3 ved første læsning eller import. Schema 3 tilføjer `category` og
-udfaldene `accepted`/`rejected`. Ukendte fremtidige schemas
+Annotationsdokumentet bruger schema 4. Schema 1, 2 og 3 migreres eksplicit og
+atomisk til schema 4 ved første læsning eller import. Schema 3 tilføjede
+`category` og udfaldene `accepted`/`rejected`; schema 4 binder hver annotation
+til en `revisionId`. Ukendte fremtidige schemas
 afvises.
 
 ```json
 {
   "mode": "merge",
   "document": {
-    "schemaVersion": 3,
+    "schemaVersion": 4,
     "bookId": "my-book",
     "updatedAt": "2026-07-15T12:00:00.000Z",
     "annotations": []
@@ -67,7 +83,7 @@ Serveren:
 - binder til `0.0.0.0` i Docker, mens Compose kun publicerer på værtens
   `127.0.0.1`;
 - afviser ikke-lokale Host-headere;
-- accepterer skrive-origins fra loopback eller den eksplicitte
+- accepterer kun requestens præcise origin eller den eksplicitte
   `security.allowedOrigins`-liste;
 - bruger HttpOnly, SameSite=Lax sessionscookies;
 - hasher passwords med Argon2id og session/invitation/token-secrets før

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "book": {
+    "id": "minimal-example",
+    "title": "Minimal bundle",
+    "language": "da",
+    "document": "book.html"
+  }
+}

@@ -4,6 +4,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "public",
     annotationCreate: "public",
     annotationView: "public",
+    surveyResponse: "public",
     registration: "disabled",
     progressTracking: "resume",
     localBypass: true,
@@ -12,6 +13,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "public",
     annotationCreate: "disabled",
     annotationView: "none",
+    surveyResponse: "disabled",
     registration: "disabled",
     progressTracking: "off",
     localBypass: false,
@@ -20,6 +22,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "public",
     annotationCreate: "public",
     annotationView: "public",
+    surveyResponse: "public",
     registration: "disabled",
     progressTracking: "resume",
     localBypass: false,
@@ -28,6 +31,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "public",
     annotationCreate: "authenticated",
     annotationView: "own",
+    surveyResponse: "authenticated",
     registration: "open",
     progressTracking: "resume",
     localBypass: false,
@@ -36,6 +40,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "public",
     annotationCreate: "invited",
     annotationView: "own",
+    surveyResponse: "invited",
     registration: "inviteOnly",
     progressTracking: "resume",
     localBypass: false,
@@ -44,6 +49,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "invited",
     annotationCreate: "disabled",
     annotationView: "none",
+    surveyResponse: "disabled",
     registration: "inviteOnly",
     progressTracking: "resume",
     localBypass: false,
@@ -52,6 +58,7 @@ export const ACCESS_PRESETS = Object.freeze({
     reading: "invited",
     annotationCreate: "invited",
     annotationView: "own",
+    surveyResponse: "invited",
     registration: "inviteOnly",
     progressTracking: "resume",
     localBypass: false,
@@ -69,6 +76,10 @@ export const PERMISSIONS = Object.freeze([
   "annotations:write",
   "annotations:moderate",
   "annotations:export",
+  "surveys:respond",
+  "surveys:manage",
+  "surveys:responses:read",
+  "surveys:export",
   "progress:read:self",
   "progress:read:all",
   "users:read",
@@ -90,9 +101,10 @@ export const ROLE_PERMISSIONS = Object.freeze({
     "annotations:read:self",
     "annotations:write",
     "annotations:export",
+    "surveys:respond",
     "progress:read:self",
   ]),
-  reader: Object.freeze(["books:read", "progress:read:self"]),
+  reader: Object.freeze(["books:read", "surveys:respond", "progress:read:self"]),
   editor: Object.freeze([
     "books:read",
     "annotations:read",
@@ -100,6 +112,10 @@ export const ROLE_PERMISSIONS = Object.freeze({
     "annotations:write",
     "annotations:moderate",
     "annotations:export",
+    "surveys:respond",
+    "surveys:manage",
+    "surveys:responses:read",
+    "surveys:export",
     "progress:read:all",
   ]),
   publisher: Object.freeze([
@@ -114,6 +130,7 @@ const ACCESS_VALUES = Object.freeze({
   reading: new Set(["public", "authenticated", "invited"]),
   annotationCreate: new Set(["disabled", "public", "authenticated", "invited"]),
   annotationView: new Set(["none", "own", "reviewGroup", "public"]),
+  surveyResponse: new Set(["disabled", "public", "authenticated", "invited"]),
   registration: new Set(["disabled", "closed", "open", "inviteOnly", "code"]),
   progressTracking: new Set(["off", "resume", "analytics"]),
 });
@@ -127,6 +144,7 @@ export function resolveAccessPolicy(raw = {}) {
     reading: raw.reading ?? base.reading,
     annotationCreate: raw.annotationCreate ?? base.annotationCreate,
     annotationView: raw.annotationView ?? base.annotationView,
+    surveyResponse: raw.surveyResponse ?? base.surveyResponse,
     registration: raw.registration ?? base.registration,
     progressTracking: raw.progressTracking ?? base.progressTracking,
     localBypass: raw.localBypass ?? base.localBypass,
@@ -200,31 +218,52 @@ export function canReadAnnotations(policy, principal, bookId) {
   return Boolean(principal && (principal.kind === "user" || principal.kind === "guest"));
 }
 
+export function canRespondToSurveys(policy, principal, bookId) {
+  if (policy.localBypass && principal?.kind === "local") return true;
+  if (principal?.kind === "token") return hasPermission(principal, "surveys:respond", bookId);
+  if (policy.surveyResponse === "disabled") return false;
+  if (policy.surveyResponse === "public") return principal?.kind === "guest" || principal?.kind === "user";
+  if (policy.surveyResponse === "authenticated") return principal?.kind === "user";
+  return hasPermission(principal, "surveys:respond", bookId);
+}
+
 export function canSeeAnnotation(policy, principal, annotation, bookId) {
   if (!canReadAnnotations(policy, principal, bookId)) return false;
-  if (isAdministrator(principal, bookId) || policy.annotationView === "public") return true;
-  if (principal?.kind === "token" && hasPermission(principal, "annotations:read", bookId)) return true;
-  if (annotation.visibility === "public") return true;
-  if (policy.annotationView === "reviewGroup" && hasPermission(principal, "annotations:read", bookId)) return true;
-  return annotation.author?.id === principal?.id;
+  if (annotation.author?.id === principal?.id
+    || isAdministrator(principal, bookId)
+    || hasPermission(principal, "annotations:read:all", bookId)
+    || hasPermission(principal, "annotations:moderate", bookId)) return true;
+  if (annotation.visibility === "private") return false;
+  if (annotation.visibility === "public") return policy.annotationView !== "none";
+  return ["reviewGroup", "public"].includes(policy.annotationView)
+    && hasPermission(principal, "annotations:read", bookId);
 }
 
 export function publicCapabilities(policy, principal, bookId) {
   const permissions = permissionsForPrincipal(principal, bookId);
+  const canRead = canReadBook(policy, principal, bookId);
   return {
     authenticated: principal?.kind === "user" || principal?.kind === "token" || principal?.kind === "local",
     principalKind: principal?.kind ?? "anonymous",
-    canRead: canReadBook(policy, principal, bookId),
+    canRead,
     canViewAnnotations: canReadAnnotations(policy, principal, bookId),
     canCreateAnnotations: canCreateAnnotation(policy, principal, bookId),
     canModerateAnnotations: permissions.has("annotations:moderate"),
-    canExportAnnotations: permissions.has("annotations:export") || policy.annotationView === "public",
+    canExportAnnotations: canRead && (permissions.has("annotations:export")
+      || (principal?.kind !== "token" && policy.annotationView === "public")),
+    canRespondToSurveys: canRespondToSurveys(policy, principal, bookId),
+    canManageSurveys: permissions.has("surveys:manage"),
+    canReadSurveyResponses: permissions.has("surveys:responses:read"),
+    canExportReviews: permissions.has("surveys:export")
+      && permissions.has("annotations:export")
+      && permissions.has("annotations:read:all"),
     canManageUsers: permissions.has("access:manage"),
     canManageTokens: permissions.has("tokens:manage"),
     canViewAllProgress: permissions.has("progress:read:all"),
     canViewAudit: permissions.has("audit:read"),
     progressTracking: policy.progressTracking,
     registration: policy.registration,
+    permissions: [...permissions].sort(),
   };
 }
 

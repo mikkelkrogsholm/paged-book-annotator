@@ -20,7 +20,7 @@
       </div>
     </div>
     <div class="topbar-actions">
-      <button class="navigation-panel-button" id="navigationPanelButton" type="button" aria-expanded="false" aria-controls="navigationPanel">
+      <button class="navigation-panel-button" id="navigationPanelButton" type="button" aria-label="Indhold" aria-expanded="false" aria-controls="navigationPanel">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/></svg>
         <span>Indhold</span>
       </button>
@@ -28,10 +28,15 @@
         <i></i>
         <span>Indlæser bogen</span>
       </div>
-      <button class="annotation-count-button" id="annotationPanelButton" type="button" aria-expanded="false" aria-controls="annotationPanel">
+      <button class="annotation-count-button" id="annotationPanelButton" type="button" aria-label="Kommentarer" aria-expanded="false" aria-controls="annotationPanel">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/></svg>
         <span>Kommentarer</span>
         <strong id="openAnnotationCount">0</strong>
+      </button>
+      <button class="survey-count-button" id="surveyPanelButton" type="button" aria-label="Feedback" aria-expanded="false" aria-controls="surveyPanel" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v14H5zM8 10h8M8 14h5"/></svg>
+        <span>Feedback</span>
+        <strong id="surveyCount">0</strong>
       </button>
       <a class="admin-link" id="adminLink" href="/admin" hidden>Admin</a>
       <button class="account-button" id="accountButton" type="button">Log ind</button>
@@ -48,7 +53,7 @@
   <main class="reader-shell" id="readerShell" aria-label="Bogviser">
     <div class="reader-bezel">
       <div class="viewport" id="viewport">
-        <iframe id="bookFrame" title="Bog"></iframe>
+        <iframe id="bookFrame" title="Bog" sandbox="allow-same-origin"></iframe>
         <div class="loading" id="loading" aria-live="polite">
           <span class="loading-sigil" id="loadingMark">B</span>
           <p id="loadingMessage">Sætter siderne</p>
@@ -101,13 +106,13 @@
         <button id="zoomInButton" type="button" aria-label="Zoom ind">+</button>
       </div>
 
-      <button class="tool-button" id="fullscreenButton" type="button" aria-label="Fuld skærm">
+      <button class="tool-button" id="fullscreenButton" type="button" aria-label="Fuld skærm" aria-pressed="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg>
       </button>
     </div>
   </nav>
 
-  <aside class="navigation-panel" id="navigationPanel" aria-label="Indholdsfortegnelse" aria-hidden="true">
+  <aside class="navigation-panel" id="navigationPanel" aria-label="Indholdsfortegnelse" aria-hidden="true" inert>
     <header class="panel-header">
       <div>
         <span>Bogens struktur</span>
@@ -165,7 +170,7 @@
     </section>
   </aside>
 
-  <aside class="annotation-panel" id="annotationPanel" aria-label="Kommentarer" aria-hidden="true">
+  <aside class="annotation-panel" id="annotationPanel" aria-label="Kommentarer" aria-hidden="true" inert>
     <header class="panel-header">
       <div>
         <span>Redaktionslag</span>
@@ -185,7 +190,7 @@
           <button type="button" data-filter="all" aria-pressed="false">Alle</button>
         </div>
         <div class="file-actions">
-          <a href="/api/annotations/export" download>Eksportér</a>
+          <a id="annotationExportLink" href="/api/annotations/export" download>Eksportér</a>
           <button id="importButton" type="button">Importér</button>
           <input id="importInput" type="file" accept="application/json,.json" hidden>
         </div>
@@ -211,7 +216,7 @@
         <select id="annotationCategory" name="category"><option value="general">Generel</option><option value="language">Sprog</option><option value="structure">Struktur</option><option value="fact">Fakta</option><option value="design">Design</option></select>
         <label for="annotationComment">Kommentar</label>
         <textarea id="annotationComment" name="comment" rows="8" required placeholder="Hvad skal ændres, undersøges eller bevares?"></textarea>
-        <p class="field-help">Kommentaren gemmes sammen med den præcise tekst eller det valgte element.</p>
+        <p class="field-help" id="composerHelp">Kommentaren gemmes sammen med det valgte mål og et stabilt boganker.</p>
         <p class="form-error" id="annotationFormError" role="alert" hidden></p>
         <div class="composer-actions">
           <button class="secondary-button" id="cancelAnnotationButton" type="button">Annullér</button>
@@ -219,6 +224,25 @@
         </div>
       </form>
     </section>
+  </aside>
+
+  <aside class="survey-panel" id="surveyPanel" aria-label="Feedback" aria-hidden="true" inert>
+    <header class="panel-header">
+      <div><span id="surveyEyebrow">Feedback på læsningen</span><h2 id="surveyTitle">Et par spørgsmål</h2></div>
+      <button class="panel-close" id="surveyPanelClose" type="button" aria-label="Luk feedback">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <p class="survey-description" id="surveyDescription"></p>
+    <form class="survey-form" id="surveyForm">
+      <div id="surveyQuestions"></div>
+      <p class="form-error" id="surveyFormError" role="alert" hidden></p>
+      <div class="survey-actions">
+        <button class="secondary-button" id="surveySkipButton" type="button">Spring over</button>
+        <button class="secondary-button" id="surveyLaterButton" type="button">Senere</button>
+        <button class="primary-button" id="surveySubmitButton" type="submit">Send feedback</button>
+      </div>
+    </form>
   </aside>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
@@ -229,19 +253,19 @@
       <span>Adgang til bogen</span>
       <h2 id="authTitle">Log ind</h2>
     </header>
-    <div class="auth-tabs" role="tablist">
-      <button type="button" data-auth-view="login" aria-pressed="true">Log ind</button>
-      <button type="button" data-auth-view="register" id="registerTab">Opret bruger</button>
-      <button type="button" data-auth-view="invite">Invitation</button>
-      <button type="button" data-auth-view="code" id="codeTab" hidden>Adgangskode</button>
-      <button type="button" data-auth-view="password" id="accountTab" hidden>Konto</button>
+    <div class="auth-tabs" role="tablist" aria-label="Adgangsmetode">
+      <button id="authTabLogin" type="button" role="tab" data-auth-view="login" aria-selected="true" aria-controls="loginForm">Log ind</button>
+      <button id="registerTab" type="button" role="tab" data-auth-view="register" aria-selected="false" aria-controls="registerForm">Opret bruger</button>
+      <button id="authTabInvite" type="button" role="tab" data-auth-view="invite" aria-selected="false" aria-controls="invitationForm">Invitation</button>
+      <button id="codeTab" type="button" role="tab" data-auth-view="code" aria-selected="false" aria-controls="accessCodeForm" hidden>Adgangskode</button>
+      <button id="accountTab" type="button" role="tab" data-auth-view="password" aria-selected="false" aria-controls="passwordForm" hidden>Konto</button>
     </div>
-    <form class="auth-form" id="loginForm" data-auth-form="login">
+    <form class="auth-form" id="loginForm" data-auth-form="login" role="tabpanel" aria-labelledby="authTabLogin">
       <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="primary-button" type="submit">Log ind</button>
     </form>
-    <form class="auth-form" id="registerForm" data-auth-form="register" hidden>
+    <form class="auth-form" id="registerForm" data-auth-form="register" role="tabpanel" aria-labelledby="registerTab" hidden>
       <label>Navn<input name="displayName" autocomplete="name" required></label>
       <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
       <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
@@ -249,7 +273,7 @@
       <label>Formål med telefon (hvis angivet)<input name="phonePurpose" placeholder="Fx kontakt om prøvelæsning"></label>
       <button class="primary-button" type="submit">Opret og fortsæt</button>
     </form>
-    <form class="auth-form" id="invitationForm" data-auth-form="invite" hidden>
+    <form class="auth-form" id="invitationForm" data-auth-form="invite" role="tabpanel" aria-labelledby="authTabInvite" hidden>
       <label>Invitationskode<input name="secret" id="invitationSecret" autocomplete="off" required></label>
       <label>Navn<input name="displayName" autocomplete="name"></label>
       <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
@@ -257,7 +281,7 @@
       <label>Formål med telefon (hvis angivet)<input name="phonePurpose" placeholder="Fx kontakt om prøvelæsning"></label>
       <button class="primary-button" type="submit">Acceptér invitation</button>
     </form>
-    <form class="auth-form" id="accessCodeForm" data-auth-form="code" hidden>
+    <form class="auth-form" id="accessCodeForm" data-auth-form="code" role="tabpanel" aria-labelledby="codeTab" hidden>
       <label>Adgangskode<input name="accessCode" id="accessCodeSecret" autocomplete="off" required></label>
       <label>Navn<input name="displayName" autocomplete="name" required></label>
       <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
@@ -266,7 +290,7 @@
       <label>Formål med telefon (hvis angivet)<input name="phonePurpose" placeholder="Fx kontakt om prøvelæsning"></label>
       <button class="primary-button" type="submit">Opret adgang og fortsæt</button>
     </form>
-    <form class="auth-form" id="passwordForm" data-auth-form="password" hidden>
+    <form class="auth-form" id="passwordForm" data-auth-form="password" role="tabpanel" aria-labelledby="accountTab" hidden>
       <label>Nuværende password<input name="currentPassword" type="password" autocomplete="current-password" required></label>
       <label>Nyt password<input name="newPassword" type="password" autocomplete="new-password" minlength="10" required></label>
       <button class="primary-button" type="submit">Skift password og log ud</button>

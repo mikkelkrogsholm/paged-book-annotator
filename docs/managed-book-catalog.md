@@ -24,6 +24,12 @@ Filer installeres først efter validering og en atomisk omdøbning:
 /data/library/<book-id>/revisions/<revision-id>/content/
 ```
 
+Antallet af gemte revisioner er begrænset pr. bog med
+`library.maxRevisionsPerBook` (standard 25), så gentagne uploads ikke kan vokse
+uden grænse. Upload afvises, når grænsen er nået; en driftsansvarlig skal da
+arkivere/eksportere installationen og rydde gamle revisioner som en kontrolleret
+vedligeholdelseshandling.
+
 `uploads` indeholder kun stagingdata. En færdig revisions `storageKey` peger på
 dens `content`-mappe relativt til dataområdet. Revisionens indhold og manifest
 ændres aldrig efter validering. `publishRevision()` ændrer kun katalogstatus og

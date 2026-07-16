@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "bun:test";
@@ -44,6 +44,12 @@ test("collaboration credentials expire or revoke and progress stays anchored", a
     const acceptedInvitation = await repository.createInvitation({ email: "accepted@example.test", role: "reviewer" });
     const invitedUser = await repository.acceptInvitation({ secret: acceptedInvitation.secret, displayName: "Inviteret", password: "inviteret-hemmeligt" });
     assert.equal(invitedUser.membership.role, "reviewer");
+    const takeoverInvitation = await repository.createInvitation({ email: reviewer.email, role: "reviewer" });
+    await assert.rejects(
+      () => repository.acceptInvitation({ secret: takeoverInvitation.secret, userId: reviewer.id, password: "forkert-hemmeligt" }),
+      /korrekte password/,
+    );
+    assert.equal((await repository.authenticate(reviewer.email, "andet-hemmeligt")).id, reviewer.id);
 
     const expiredToken = await repository.createServiceToken({ name: "Kort token", scopes: ["books:read"], expiresInHours: 1 });
     now = new Date("2026-07-15T13:00:03.000Z");
@@ -80,7 +86,43 @@ test("collaboration credentials expire or revoke and progress stays anchored", a
   }
 });
 
-test("collaboration schema migrates an existing version 1 database through version 3", async () => {
+test("invitation races leave no orphan account and expired credentials are purged after grace", async () => {
+  let now = new Date("2026-01-01T00:00:00.000Z");
+  const directory = await mkdtemp(join(tmpdir(), "collaboration-hardening-"));
+  const filePath = join(directory, "private", "collaboration.sqlite");
+  const repository = new CollaborationRepository({ filePath, bookId: "book-1", clock: () => new Date(now) });
+  try {
+    const invitation = await repository.createInvitation({ email: "raced@example.test" });
+    const originalCreateUser = repository.createUser.bind(repository);
+    repository.createUser = async (input) => {
+      const user = await originalCreateUser(input);
+      repository.revokeInvitation(invitation.id);
+      return user;
+    };
+    await assert.rejects(
+      () => repository.acceptInvitation({ secret: invitation.secret, password: "meget-hemmeligt" }),
+      /allerede anvendt eller udløbet/i,
+    );
+    assert.equal(repository.getUserByEmail("raced@example.test"), null);
+
+    repository.createUser = originalCreateUser;
+    const user = await repository.createUser({ email: "cleanup@example.test", displayName: "Cleanup", password: "meget-hemmeligt" });
+    await repository.createSession(user.id);
+    const token = await repository.createServiceToken({ name: "Cleanup", scopes: ["books:read"], expiresInHours: 1 });
+    now = new Date("2026-03-02T02:00:00.000Z");
+    const purged = repository.purgeExpiredCredentials({ graceDays: 30 });
+    assert.equal(purged.sessions, 1);
+    assert.equal(purged.tokens, 1);
+    assert.equal(repository.listServiceTokens().some((candidate) => candidate.id === token.id), false);
+    assert.equal((await stat(filePath)).mode & 0o777, 0o600);
+    assert.equal((await stat(join(directory, "private"))).mode & 0o777, 0o700);
+  } finally {
+    repository.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("collaboration schema migrates an existing version 1 database through version 4", async () => {
   const directory = await mkdtemp(join(tmpdir(), "collaboration-v1-"));
   const filePath = join(directory, "collaboration.sqlite");
   const legacy = new Database(filePath, { create: true });
@@ -95,7 +137,7 @@ test("collaboration schema migrates an existing version 1 database through versi
   legacy.close();
   const repository = new CollaborationRepository({ filePath, bookId: "book-1" });
   try {
-    assert.equal(repository.database.query("PRAGMA user_version").get().user_version, 3);
+    assert.equal(repository.database.query("PRAGMA user_version").get().user_version, 4);
     assert.equal(repository.getAccessPolicy(resolveAccessPolicy({ preset: "publicRead" })).preset, "publicRead");
     assert.equal(repository.database.query("PRAGMA table_info(reading_progress)").all().some((column) => column.name === "engaged_percent"), true);
   } finally {
@@ -148,7 +190,7 @@ test("collaboration schema migrates version 2 grants and pseudonymizes legacy au
   legacy.close();
   const repository = new CollaborationRepository({ filePath });
   try {
-    assert.equal(repository.database.query("PRAGMA user_version").get().user_version, 3);
+    assert.equal(repository.database.query("PRAGMA user_version").get().user_version, 4);
     assert.equal(repository.database.query("PRAGMA table_info(memberships)").all()
       .some((column) => column.name === "permissions_json"), true);
     assert.deepEqual(repository.database.query(
@@ -215,7 +257,7 @@ test("book grants, registration credentials and progress stay isolated across bo
       bookId: "book-c", email: "second@example.test", permissions: ["annotations:export"],
     });
     await assert.rejects(
-      () => repository.acceptInvitation({ secret: invitation.secret, userId: user.id, bookId: "book-c" }),
+      () => repository.acceptInvitationForAuthenticatedUser({ secret: invitation.secret, userId: user.id, bookId: "book-c" }),
       /anden konto/,
     );
     const invited = await repository.enrollUser({
@@ -303,6 +345,91 @@ test("multi-book tokens, reviewer PII export and erasure use explicit boundaries
     assert.equal(repository.getReviewerProfile(user.id, "book-a"), null);
     assert.equal(repository.principalForUser(user.id, "book-a"), null);
     assert.equal(repository.listAudit({ bookId: "book-a" })[0].actorId, audit.actorId);
+  } finally {
+    repository.close();
+  }
+});
+
+test("book member and token administration stays within explicit book grants", async () => {
+  const repository = new CollaborationRepository({ filePath: ":memory:" });
+  try {
+    const memberA = await repository.createUser({
+      email: "member-a@example.test", displayName: "Member A", password: "meget-hemmeligt",
+    });
+    const memberB = await repository.createUser({
+      email: "member-b@example.test", displayName: "Member B", password: "meget-hemmeligt",
+    });
+    repository.setMembership(memberA.id, "reviewer", { bookId: "book-a" });
+    repository.setMembership(memberB.id, "reviewer", { bookId: "book-b" });
+
+    assert.deepEqual(repository.listUsers("book-a").map((user) => user.id), [memberA.id]);
+    assert.deepEqual(repository.listUsers("book-b").map((user) => user.id), [memberB.id]);
+    assert.deepEqual(new Set(repository.listUsers(null).map((user) => user.id)), new Set([memberA.id, memberB.id]));
+
+    const tokenA = await repository.createServiceToken({
+      name: "Book A", grants: [{ bookId: "book-a", permissions: ["books:read"] }],
+    });
+    const tokenB = await repository.createServiceToken({
+      name: "Book B", grants: [{ bookId: "book-b", permissions: ["books:read"] }],
+    });
+    const instanceToken = await repository.createServiceToken({ name: "Instance", instanceAdmin: true });
+
+    assert.deepEqual(repository.listServiceTokens("book-a").map((token) => token.id), [tokenA.id]);
+    assert.deepEqual(
+      new Set(repository.listServiceTokens("book-a", { includeInstanceAdmin: true }).map((token) => token.id)),
+      new Set([tokenA.id, instanceToken.id]),
+    );
+    assert.deepEqual(repository.listServiceTokens(null), []);
+    assert.deepEqual(
+      new Set(repository.listServiceTokens(null, { includeInstanceAdmin: true, includeAllBookGrants: true }).map((token) => token.id)),
+      new Set([tokenA.id, tokenB.id, instanceToken.id]),
+    );
+
+    assert.equal(repository.revokeServiceToken(tokenB.id, "book-a"), false);
+    assert.equal(repository.revokeServiceToken(instanceToken.id, "book-a"), false);
+    assert.equal(repository.revokeServiceToken(instanceToken.id, "book-a", { allowInstanceAdmin: true }), true);
+    assert.equal(repository.revokeServiceToken(tokenB.id, null), false);
+    assert.equal(repository.revokeServiceToken(tokenB.id, "book-b"), true);
+  } finally {
+    repository.close();
+  }
+});
+
+test("survey versions are immutable and one response is upserted per reader, version and revision", async () => {
+  let sequence = 0;
+  const repository = new CollaborationRepository({
+    filePath: ":memory:", bookId: "book-a", createId: (prefix) => `${prefix}-${++sequence}`,
+    clock: () => new Date("2026-07-15T12:00:00.000Z"),
+  });
+  const definition = {
+    schemaVersion: 1,
+    title: "Kapitel-feedback",
+    description: "",
+    target: { kind: "section", anchorId: "chapter-1", pageNumberHint: 1 },
+    trigger: { mode: "afterLeave" },
+    questions: [{ id: "clarity", type: "rating", prompt: "Hvor let var det at forstå?", required: true, scale: { min: 1, max: 5, minLabel: "Svært", maxLabel: "Let" } }],
+  };
+  try {
+    const user = await repository.createUser({ email: "reader@survey.test", displayName: "Reader", password: "meget-hemmeligt", bookRole: "reviewer" });
+    const principal = repository.principalForUser(user.id, "book-a");
+    const created = repository.createSurvey({ definition, principal });
+    assert.equal(created.draftVersion, 1);
+    const published = repository.publishSurvey(created.id, { revisionId: "revision-1" });
+    assert.equal(published.published.definition.target.revisionId, "revision-1");
+    const first = repository.submitSurveyResponse({ surveyId: created.id, answers: [{ questionId: "clarity", value: 3 }], revisionId: "revision-1", principal });
+    const updated = repository.submitSurveyResponse({ surveyId: created.id, answers: [{ questionId: "clarity", value: 5 }], revisionId: "revision-1", principal });
+    assert.equal(updated.id, first.id);
+    assert.deepEqual(updated.answers, [{ questionId: "clarity", value: 5 }]);
+    assert.equal(repository.listSurveyResponses("book-a").length, 1);
+
+    const edited = repository.updateSurveyDraft(created.id, { ...definition, title: "Ny titel" });
+    assert.equal(edited.published.definition.title, "Kapitel-feedback");
+    assert.equal(edited.draftVersion, 2);
+    assert.equal(repository.publishSurvey(created.id, { revisionId: "revision-2" }).publishedVersion, 2);
+    assert.throws(() => repository.submitSurveyResponse({ surveyId: created.id, answers: [{ questionId: "clarity", value: 4 }], revisionId: "revision-1", principal }), /anden bogrevision/);
+    assert.equal(repository.exportUserData(user.id).surveyResponses.length, 1);
+    repository.eraseUserData(user.id);
+    assert.equal(repository.listSurveyResponses("book-a").length, 0);
   } finally {
     repository.close();
   }

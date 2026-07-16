@@ -10,6 +10,19 @@ function requireScopeId(scopeId) {
   return scopeId;
 }
 
+function createStableTargetDraft(type, { scopeId, pageNumber, label }) {
+  return {
+    type,
+    target: {
+      scopeId: requireScopeId(scopeId),
+      pageNumber: requirePageNumber(pageNumber),
+      label: String(label ?? ""),
+    },
+    status: "open",
+    anchorState: "attached",
+  };
+}
+
 export function createTextAnnotationDraft({
   scopeId,
   pageNumber,
@@ -32,29 +45,11 @@ export function createTextAnnotationDraft({
 }
 
 export function createElementAnnotationDraft({ scopeId, pageNumber, label }) {
-  return {
-    type: "element",
-    target: {
-      scopeId: requireScopeId(scopeId),
-      pageNumber: requirePageNumber(pageNumber),
-      label: String(label ?? ""),
-    },
-    status: "open",
-    anchorState: "attached",
-  };
+  return createStableTargetDraft("element", { scopeId, pageNumber, label });
 }
 
-export function createPageAnnotationDraft({ scopeId = "", pageNumber, label }) {
-  return {
-    type: "page",
-    target: {
-      scopeId: String(scopeId),
-      pageNumber: requirePageNumber(pageNumber),
-      label: String(label ?? ""),
-    },
-    status: "open",
-    anchorState: "attached",
-  };
+export function createPageAnnotationDraft({ scopeId, pageNumber, label }) {
+  return createStableTargetDraft("page", { scopeId, pageNumber, label });
 }
 
 export function resolveTextAnnotationTarget(annotation, scopes) {

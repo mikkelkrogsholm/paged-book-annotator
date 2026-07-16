@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 
 const minimumFunctions = 85;
 const minimumLines = 90;
-const processResult = Bun.spawn(["bun", "test", "src/server", "--coverage"], {
+const processResult = Bun.spawn(["bun", "test", "src/server", "scripts/pba-bundle.test.mjs", "--coverage"], {
   cwd: fileURLToPath(new URL("..", import.meta.url)),
   env: process.env,
   stdout: "pipe",

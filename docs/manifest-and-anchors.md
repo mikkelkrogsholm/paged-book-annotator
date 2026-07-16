@@ -100,13 +100,14 @@ Filen er almindelig JSON:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "bookId": "my-book",
   "updatedAt": "2026-07-14T12:00:00.000Z",
   "annotations": [
     {
       "id": "annotation-...",
       "bookId": "my-book",
+      "revisionId": "revision-2026-07-14",
       "type": "text",
       "target": {
         "scopeId": "chapter-01.paragraph-03",
@@ -142,10 +143,13 @@ Filen er almindelig JSON:
 }
 ```
 
+`revisionId` binder annotationen til den bogrevision, hvor den blev oprettet.
 `pageNumber` er en nyttig, men afledt genvej. `scopeId` og tekstselector er de
-egentlige genforankringsmekanismer. `visibility` kan være `private`,
+egentlige genforankringsmekanismer ved visning mod en anden revision.
+`visibility` kan være `private`,
 `reviewGroup` eller `public`; adgangsprofilen sætter stadig den øvre grænse for,
 hvilke annotationer en aktør kan hente. `category` er `general`, `language`,
 `structure`, `fact` eller `design`; status er `open`, `resolved`, `accepted`
-eller `rejected`. Eksisterende schema 1- og 2-filer migreres eksplicit til
-schema 3, med den lokale ejer som forfatter for schema 1-data.
+eller `rejected`. Eksisterende schema 1-, 2- og 3-filer migreres eksplicit til
+schema 4; ældre annotationer får `revisionId: "legacy"`, og schema 1-data får
+den lokale ejer som forfatter.

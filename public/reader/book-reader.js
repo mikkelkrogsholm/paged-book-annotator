@@ -1,3 +1,12 @@
+import { showUiToast } from "../ui-state.js";
+
+export function readerShortcutIsBlocked(event, hostDocument = window.document) {
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return true;
+  if (hostDocument.querySelector("dialog[open]")) return true;
+  const target = event.target;
+  return Boolean(target?.closest?.("button, a, input, textarea, select, summary, [contenteditable=true], [role=button], [role=tab], [role=slider]"));
+}
+
 export class BookReader extends EventTarget {
   constructor({ frame, viewport, bookUrl, paginationTimeoutMs = 45_000 }) {
     super();
@@ -72,6 +81,7 @@ export class BookReader extends EventTarget {
 
     this.buildUnits();
     this.bindBookGestures();
+    this.document.addEventListener("keydown", (event) => this.handleReaderShortcut(event));
     this.frame.classList.add("is-ready");
     document.querySelectorAll(".pagedjs_page").forEach((page, index) => {
       page.dataset.bookPageNumber = String(index + 1);
@@ -115,6 +125,8 @@ export class BookReader extends EventTarget {
       const unit = this.document.createElement("section");
       unit.className = `reader-unit${this.single ? " is-single" : ""}`;
       unit.dataset.index = String(index);
+      unit.inert = true;
+      unit.setAttribute("aria-hidden", "true");
       if (this.single) unit.append(this.createSlot("single", group[0]));
       else unit.append(this.createSlot("left", group[0]), this.createSlot("right", group[1]));
       this.root.append(unit);
@@ -129,7 +141,7 @@ export class BookReader extends EventTarget {
       : spreadMatch
         ? Math.max(0, Math.min(this.units.length - 1, Number(spreadMatch[1]) - 1))
         : 0;
-    this.units[this.current]?.classList.add("is-active");
+    this.setActiveUnit(this.current);
     this.updateScale();
     this.updateControls();
   }
@@ -148,9 +160,14 @@ export class BookReader extends EventTarget {
   }
 
   currentPrimaryAnchor() {
+    return this.currentAnchors()[0] ?? "";
+  }
+
+  currentAnchors() {
     const unit = this.units[this.current];
-    const activeContent = unit?.querySelector("[data-book-anchor]");
-    return activeContent?.dataset.bookAnchor ?? "";
+    return [...new Set([...unit?.querySelectorAll("[data-book-anchor]") ?? []]
+      .map((element) => element.dataset.bookAnchor)
+      .filter(Boolean))];
   }
 
   getPageByNumber(pageNumber) {
@@ -216,7 +233,7 @@ export class BookReader extends EventTarget {
     document.querySelector("#nextButton").disabled = this.current === this.units.length - 1;
     document.querySelector("#pageHitNext").disabled = this.current === this.units.length - 1;
     history.replaceState(null, "", `#${this.single ? "page" : "spread"}=${this.current + 1}`);
-    this.dispatchEvent(new CustomEvent("pagechange", { detail: { pageNumbers: numbers, anchor: this.currentPrimaryAnchor() } }));
+    this.dispatchEvent(new CustomEvent("pagechange", { detail: { pageNumbers: numbers, anchor: this.currentPrimaryAnchor(), anchors: this.currentAnchors() } }));
   }
 
   goTo(index) {
@@ -225,6 +242,10 @@ export class BookReader extends EventTarget {
     const direction = nextIndex > this.current ? 1 : -1;
     const currentUnit = this.units[this.current];
     const nextUnit = this.units[nextIndex];
+    currentUnit.inert = true;
+    currentUnit.setAttribute("aria-hidden", "true");
+    nextUnit.inert = false;
+    nextUnit.setAttribute("aria-hidden", "false");
     currentUnit.classList.remove("is-active");
     currentUnit.classList.add(direction > 0 ? "is-leaving-left" : "is-leaving-right");
     if (direction < 0) nextUnit.classList.add("enter-from-left");
@@ -235,6 +256,15 @@ export class BookReader extends EventTarget {
     window.setTimeout(() => currentUnit.classList.remove("is-leaving-left", "is-leaving-right"), 760);
     this.current = nextIndex;
     this.updateControls();
+  }
+
+  setActiveUnit(index) {
+    this.units.forEach((unit, unitIndex) => {
+      const active = unitIndex === index;
+      unit.classList.toggle("is-active", active);
+      unit.inert = !active;
+      unit.setAttribute("aria-hidden", String(!active));
+    });
   }
 
   setZoom(nextZoom) {
@@ -269,23 +299,25 @@ export class BookReader extends EventTarget {
     document.querySelector("#zoomOutButton").addEventListener("click", () => this.setZoom(this.zoom - 0.08));
     document.querySelector("#zoomInButton").addEventListener("click", () => this.setZoom(this.zoom + 0.08));
     document.querySelector("#zoomResetButton").addEventListener("click", () => this.setZoom(1));
-    document.querySelector("#fullscreenButton").addEventListener("click", async () => {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.documentElement.requestFullscreen();
+    const fullscreenButton = document.querySelector("#fullscreenButton");
+    fullscreenButton.addEventListener("click", async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await document.documentElement.requestFullscreen();
+      } catch (error) {
+        this.showControlError(error instanceof Error ? error.message : "Fuld skærm kunne ikke åbnes.");
+      }
+    });
+    document.addEventListener("fullscreenchange", () => {
+      const fullscreen = Boolean(document.fullscreenElement);
+      fullscreenButton.setAttribute("aria-label", fullscreen ? "Afslut fuld skærm" : "Fuld skærm");
+      fullscreenButton.setAttribute("aria-pressed", String(fullscreen));
     });
     document.querySelector("#pageScrubber").addEventListener("input", (event) => {
       this.goToPageNumber(Number(event.target.value));
     });
 
-    document.addEventListener("keydown", (event) => {
-      if (event.target.matches("textarea, input")) return;
-      if (event.key === "ArrowLeft" || event.key === "PageUp") this.goTo(this.current - 1);
-      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") this.goTo(this.current + 1);
-      if (event.key === "Home") this.goTo(0);
-      if (event.key === "End") this.goTo(this.units.length - 1);
-      if (event.key === "+" || event.key === "=") this.setZoom(this.zoom + 0.08);
-      if (event.key === "-") this.setZoom(this.zoom - 0.08);
-    });
+    document.addEventListener("keydown", (event) => this.handleReaderShortcut(event));
 
     new ResizeObserver(() => this.updateScale()).observe(this.viewport);
     this.mobileQuery.addEventListener("change", (event) => {
@@ -296,5 +328,23 @@ export class BookReader extends EventTarget {
       this.buildUnits({ preservePage: anchor });
       document.querySelector("#renderStatus span").textContent = this.single ? "Enkeltside" : "Opslag klar";
     });
+  }
+
+  handleReaderShortcut(event) {
+    if (readerShortcutIsBlocked(event, window.document)) return;
+    let action = null;
+    if (event.key === "ArrowLeft" || event.key === "PageUp") action = () => this.goTo(this.current - 1);
+    if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") action = () => this.goTo(this.current + 1);
+    if (event.key === "Home") action = () => this.goTo(0);
+    if (event.key === "End") action = () => this.goTo(this.units.length - 1);
+    if (event.key === "+" || event.key === "=") action = () => this.setZoom(this.zoom + 0.08);
+    if (event.key === "-") action = () => this.setZoom(this.zoom - 0.08);
+    if (!action) return;
+    event.preventDefault();
+    action();
+  }
+
+  showControlError(message) {
+    showUiToast(message, { error: true });
   }
 }

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/mikkelkrogsholm/paged-book-annotator/main/schemas/pba-review-export.v1.schema.json",
+  "title": "Paged Book Annotator Review Export V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "exportedAt", "book", "annotations", "surveys", "surveyResponses", "readingProgress"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "paged-book-review-export" },
+    "exportedAt": { "$ref": "#/$defs/timestamp" },
+    "book": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "revisionId", "buildId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmpty" }, "title": { "$ref": "#/$defs/nonEmpty" },
+        "revisionId": { "type": ["string", "null"] }, "buildId": { "type": ["string", "null"] }
+      }
+    },
+    "annotations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "updatedAt", "items"],
+      "properties": {
+        "schemaVersion": { "const": 4 },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/annotation" } }
+      }
+    },
+    "surveys": { "type": "array", "items": { "$ref": "#/$defs/survey" } },
+    "surveyResponses": { "type": "array", "items": { "$ref": "#/$defs/surveyResponse" } },
+    "readingProgress": {
+      "type": "object", "additionalProperties": false, "required": ["included", "items"],
+      "properties": { "included": { "type": "boolean" }, "items": { "type": "array", "items": { "$ref": "#/$defs/progress" } } }
+    }
+  },
+  "$defs": {
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "nullableString": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "actor": {
+      "type": "object", "additionalProperties": false, "required": ["id", "displayName", "kind"],
+      "properties": { "id": { "$ref": "#/$defs/nonEmpty" }, "displayName": { "$ref": "#/$defs/nonEmpty" }, "kind": { "$ref": "#/$defs/nonEmpty" } }
+    },
+    "textSelector": {
+      "type": "object", "additionalProperties": false, "required": ["type", "exact", "prefix", "suffix"],
+      "properties": {
+        "type": { "const": "TextQuoteSelector" }, "exact": { "$ref": "#/$defs/nonEmpty" },
+        "prefix": { "type": "string" }, "suffix": { "type": "string" },
+        "position": {
+          "type": "object", "additionalProperties": false, "required": ["start", "end"],
+          "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 1 } }
+        }
+      }
+    },
+    "annotation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "bookId", "revisionId", "type", "target", "comment", "status", "anchorState", "visibility", "category", "author", "updatedBy", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmpty" }, "bookId": { "$ref": "#/$defs/nonEmpty" }, "revisionId": { "$ref": "#/$defs/nonEmpty" },
+        "type": { "enum": ["text", "element", "page"] }, "comment": { "$ref": "#/$defs/nonEmpty" },
+        "status": { "enum": ["open", "resolved", "accepted", "rejected"] }, "anchorState": { "enum": ["attached", "orphaned"] },
+        "visibility": { "enum": ["private", "reviewGroup", "public"] }, "category": { "enum": ["general", "language", "structure", "fact", "design"] },
+        "target": {
+          "type": "object", "additionalProperties": false, "required": ["pageNumber", "label", "scopeId"],
+          "properties": { "pageNumber": { "type": "integer", "minimum": 1 }, "label": { "type": "string" }, "scopeId": { "type": "string" }, "selector": { "$ref": "#/$defs/textSelector" } }
+        },
+        "author": { "$ref": "#/$defs/actor" }, "updatedBy": { "$ref": "#/$defs/actor" },
+        "createdAt": { "$ref": "#/$defs/timestamp" }, "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "anchorId", "contextStartAnchorId", "pageNumberHint", "revisionId", "label"],
+      "properties": {
+        "kind": { "enum": ["page", "section"] }, "anchorId": { "$ref": "#/$defs/nonEmpty" },
+        "contextStartAnchorId": { "$ref": "#/$defs/nullableString" }, "pageNumberHint": { "type": ["integer", "null"], "minimum": 1 },
+        "revisionId": { "$ref": "#/$defs/nullableString" }, "label": { "type": "string" }
+      }
+    },
+    "answer": {
+      "type": "object", "additionalProperties": false, "required": ["questionId", "value"],
+      "properties": { "questionId": { "$ref": "#/$defs/nonEmpty" }, "value": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 5 }, { "type": "string" }] } }
+    },
+    "respondent": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "ref", "userId", "displayName"],
+      "properties": { "kind": { "$ref": "#/$defs/nonEmpty" }, "ref": { "$ref": "#/$defs/nonEmpty" }, "userId": { "$ref": "#/$defs/nullableString" }, "displayName": { "$ref": "#/$defs/nullableString" } }
+    },
+    "surveyVersion": {
+      "type": "object", "additionalProperties": false, "required": ["version", "state", "definition", "createdAt", "publishedAt"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 }, "state": { "enum": ["draft", "published", "superseded"] },
+        "definition": {
+          "type": "object", "required": ["schemaVersion", "title", "description", "target", "trigger", "questions"],
+          "properties": { "schemaVersion": { "const": 1 }, "title": { "$ref": "#/$defs/nonEmpty" }, "description": { "type": "string" }, "target": { "$ref": "#/$defs/target" }, "trigger": { "type": "object" }, "questions": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "object", "required": ["id", "type", "prompt", "required"] } } }
+        },
+        "createdAt": { "$ref": "#/$defs/timestamp" }, "publishedAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }
+      }
+    },
+    "survey": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "bookId", "status", "publishedVersion", "draftVersion", "published", "draft", "versions", "createdAt", "updatedAt", "publishedAt", "closedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmpty" }, "bookId": { "$ref": "#/$defs/nonEmpty" }, "status": { "enum": ["draft", "published", "closed"] },
+        "publishedVersion": { "type": ["integer", "null"], "minimum": 1 }, "draftVersion": { "type": ["integer", "null"], "minimum": 1 },
+        "published": { "oneOf": [{ "$ref": "#/$defs/surveyVersion" }, { "type": "null" }] }, "draft": { "oneOf": [{ "$ref": "#/$defs/surveyVersion" }, { "type": "null" }] },
+        "versions": { "type": "array", "items": { "$ref": "#/$defs/surveyVersion" } },
+        "createdAt": { "$ref": "#/$defs/timestamp" }, "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "publishedAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }, "closedAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] }
+      }
+    },
+    "surveyResponse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "surveyId", "surveyVersion", "bookId", "revisionId", "respondent", "target", "answers", "submittedAt", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmpty" }, "surveyId": { "$ref": "#/$defs/nonEmpty" }, "surveyVersion": { "type": "integer", "minimum": 1 },
+        "bookId": { "$ref": "#/$defs/nonEmpty" }, "revisionId": { "$ref": "#/$defs/nonEmpty" }, "respondent": { "$ref": "#/$defs/respondent" },
+        "target": { "$ref": "#/$defs/target" }, "answers": { "type": "array", "items": { "$ref": "#/$defs/answer" } },
+        "submittedAt": { "$ref": "#/$defs/timestamp" }, "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "readPage": {
+      "type": "object", "required": ["anchorId", "pageNumber", "firstReadAt", "lastReadAt", "visitCount"],
+      "properties": { "anchorId": { "$ref": "#/$defs/nonEmpty" }, "pageNumber": { "type": "integer", "minimum": 1 }, "firstReadAt": { "$ref": "#/$defs/timestamp" }, "lastReadAt": { "$ref": "#/$defs/timestamp" }, "visitCount": { "type": "integer", "minimum": 1 } }
+    },
+    "progress": {
+      "type": "object", "additionalProperties": true,
+      "required": ["userId", "bookId", "anchorId", "pageNumber", "percent", "engagedPercent", "completedAt", "lastEngagedAt", "buildId", "updatedAt", "tracking", "readPages"],
+      "properties": {
+        "userId": { "$ref": "#/$defs/nonEmpty" }, "displayName": { "type": "string" }, "email": { "type": "string" }, "bookId": { "$ref": "#/$defs/nonEmpty" },
+        "anchorId": { "$ref": "#/$defs/nonEmpty" }, "pageNumber": { "type": "integer", "minimum": 1 }, "percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "engagedPercent": { "type": "number", "minimum": 0, "maximum": 100 }, "completedAt": { "$ref": "#/$defs/nullableString" }, "lastEngagedAt": { "$ref": "#/$defs/nullableString" },
+        "buildId": { "type": "string" }, "updatedAt": { "$ref": "#/$defs/timestamp" }, "tracking": { "type": "object" }, "readPages": { "type": "array", "items": { "$ref": "#/$defs/readPage" } }
+      }
+    }
+  }
+}

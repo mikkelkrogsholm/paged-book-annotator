@@ -6,7 +6,8 @@
   "library": {
     "dataDir": "data",
     "catalogDatabase": "data/catalog.sqlite",
-    "defaultBookId": "example-book"
+    "defaultBookId": "example-book",
+    "maxRevisionsPerBook": 25
   },
   "book": {
     "id": "example-book",

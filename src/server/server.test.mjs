@@ -4,7 +4,26 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "bun:test";
 
-import { createBookViewerServer, loadBookViewerConfig } from "../../server.mjs";
+import { assertSafeLocalBypassBind, createBookViewerServer, createMutationRateLimiter, loadBookViewerConfig } from "../../server.mjs";
+
+test("local bypass rejects accidental non-loopback binding", () => {
+  assert.throws(
+    () => assertSafeLocalBypassBind({ access: { localBypass: true } }, "0.0.0.0"),
+    /kun bindes til loopback/i,
+  );
+  assert.doesNotThrow(() => assertSafeLocalBypassBind({ access: { localBypass: true } }, "127.0.0.1"));
+});
+
+test("anonymous mutation limits are bounded per address and reset", () => {
+  let now = 0;
+  const limiter = createMutationRateLimiter({ clock: () => now, windowMs: 1_000 });
+  const mutation = { address: "127.0.0.2", pathname: "/api/auth/login", method: "POST", principalKind: "guest" };
+  for (let index = 0; index < 20; index += 1) limiter.assert(mutation);
+  assert.throws(() => limiter.assert(mutation), /for mange/i);
+  now = 1_001;
+  assert.doesNotThrow(() => limiter.assert(mutation));
+  assert.doesNotThrow(() => limiter.assert({ ...mutation, principalKind: "user" }));
+});
 
 test("server exposes config, book assets and persistent annotation CRUD", async () => {
   const directory = await mkdtemp(join(tmpdir(), "book-viewer-server-"));
@@ -52,6 +71,11 @@ test("server exposes config, book assets and persistent annotation CRUD", async 
     const viewerHeadResponse = await fetch(`${baseUrl}/preview.html`, { method: "HEAD" });
     assert.equal(viewerHeadResponse.status, 200);
     assert.equal(await viewerHeadResponse.text(), "");
+
+    const fontResponse = await fetch(`${baseUrl}/runtime/fonts/source-sans-3-latin-ext-400-normal.woff2`);
+    assert.equal(fontResponse.status, 200);
+    assert.equal(fontResponse.headers.get("content-type"), "font/woff2");
+    assert.ok((await fontResponse.arrayBuffer()).byteLength > 1_000);
 
     const bookHeadResponse = await fetch(`${baseUrl}/book/book.html`, { method: "HEAD" });
     assert.equal(bookHeadResponse.status, 200);

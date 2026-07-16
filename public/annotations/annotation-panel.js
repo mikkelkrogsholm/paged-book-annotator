@@ -1,3 +1,5 @@
+import { closeSidePanel, openSidePanel, showUiToast } from "../ui-state.js";
+
 const typeLabels = Object.freeze({
   text: "Tekst",
   element: "Element",
@@ -22,7 +24,7 @@ function formatDate(value) {
 }
 
 export class AnnotationPanel {
-  constructor({ capabilities, principal }) {
+  constructor({ capabilities, principal, exportUrl = "/api/annotations/export" }) {
     this.capabilities = capabilities;
     this.principal = principal;
     this.panel = document.querySelector("#annotationPanel");
@@ -39,9 +41,16 @@ export class AnnotationPanel {
     this.annotations = [];
     this.draft = null;
     this.editingId = null;
+    this.composerIntentId = 0;
+    this.saving = false;
     this.callbacks = {};
+    this.returnFocus = null;
     document.querySelector("#importButton").hidden = !capabilities.canModerateAnnotations;
-    document.querySelector(".file-actions a").hidden = !capabilities.canExportAnnotations;
+    const exportLink = document.querySelector("#annotationExportLink");
+    exportLink.href = exportUrl;
+    exportLink.hidden = !capabilities.canExportAnnotations;
+    const emptyMessage = this.empty.querySelector("p");
+    if (!capabilities.canCreateAnnotations) emptyMessage.textContent = "Der er ingen kommentarer, du har adgang til at se.";
     this.bindEvents();
   }
 
@@ -60,6 +69,12 @@ export class AnnotationPanel {
     document.querySelector("#cancelAnnotationButton").addEventListener("click", () => this.showBrowser());
     document.querySelector("#importButton").addEventListener("click", () => document.querySelector("#importInput").click());
     document.querySelector("#importInput").addEventListener("change", (event) => this.importFile(event));
+    this.panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.close();
+      }
+    });
 
     document.querySelector(".filter-group").addEventListener("click", (event) => {
       const button = event.target.closest("button[data-filter]");
@@ -80,11 +95,11 @@ export class AnnotationPanel {
       const action = button.dataset.action;
       if (action === "navigate") this.callbacks.onNavigate?.(annotation);
       if (action === "edit") this.openComposer(annotation, annotation.id);
-      if (action === "status") this.callbacks.onUpdate?.(annotation.id, {
+      if (action === "status") await this.runItemAction(button, () => this.callbacks.onUpdate?.(annotation.id, {
         status: annotation.status === "open" ? "resolved" : "open",
-      });
+      }));
       if (action === "delete" && window.confirm("Vil du slette denne kommentar?")) {
-        this.callbacks.onDelete?.(annotation.id);
+        await this.runItemAction(button, () => this.callbacks.onDelete?.(annotation.id));
       }
     });
 
@@ -95,29 +110,29 @@ export class AnnotationPanel {
         this.showFormError("Skriv en kommentar, før du gemmer.");
         return;
       }
+      const operation = { editingId: this.editingId, draft: this.draft, intentId: this.composerIntentId };
+      const isCurrentOperation = () => this.composerIntentId === operation.intentId;
       this.setSaving(true);
       try {
-        if (this.editingId) await this.callbacks.onUpdate?.(this.editingId, { comment, category: this.category.value });
-        else await this.callbacks.onCreate?.({ ...this.draft, comment, category: this.category.value });
-        this.showBrowser();
+        if (operation.editingId) await this.callbacks.onUpdate?.(operation.editingId, { comment, category: this.category.value });
+        else await this.callbacks.onCreate?.({ ...operation.draft, comment, category: this.category.value });
+        if (isCurrentOperation()) this.showBrowser();
       } catch (error) {
-        this.showFormError(error.message);
+        if (isCurrentOperation()) this.showFormError(error.message);
       } finally {
-        this.setSaving(false);
+        if (isCurrentOperation()) this.setSaving(false);
       }
     });
   }
 
   open() {
-    this.panel.classList.add("is-open");
-    this.panel.setAttribute("aria-hidden", "false");
-    this.panelButton.setAttribute("aria-expanded", "true");
+    this.returnFocus = openSidePanel(this.panel, this.panelButton, this.returnFocus);
+    window.setTimeout(() => document.querySelector("#annotationPanelClose")?.focus(), 0);
   }
 
-  close() {
-    this.panel.classList.remove("is-open");
-    this.panel.setAttribute("aria-hidden", "true");
-    this.panelButton.setAttribute("aria-expanded", "false");
+  close({ restoreFocus = true } = {}) {
+    if (!this.saving) this.composerIntentId += 1;
+    closeSidePanel(this.panel, this.panelButton, this.returnFocus, { restoreFocus });
   }
 
   toggle() {
@@ -171,14 +186,35 @@ export class AnnotationPanel {
     }).join("");
   }
 
+  async runItemAction(button, action) {
+    button.disabled = true;
+    try {
+      await action();
+    } catch (error) {
+      this.showToast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  focusAnnotation(id) {
+    window.setTimeout(() => this.list.querySelector(`[data-annotation-id="${CSS.escape(id)}"] .annotation-target-button`)?.focus(), 0);
+  }
+
   openComposer(draft, editingId = null) {
     if (!this.capabilities.canCreateAnnotations && !this.canEdit(draft)) return;
+    this.composerIntentId += 1;
     this.draft = draft;
     this.editingId = editingId;
     const annotation = editingId ? draft : null;
     const target = draft.target;
     document.querySelector("#composerType").textContent = typeLabels[draft.type];
     document.querySelector("#composerTarget").textContent = target.label || target.scopeId || `Side ${target.pageNumber}`;
+    document.querySelector("#composerHelp").textContent = draft.type === "page"
+      ? "Kommentaren gemmes med sidetallet som hint og det nærmeste stabile boganker."
+      : draft.type === "text"
+        ? "Kommentaren gemmes med tekstposition, tekstcitat og et stabilt boganker."
+        : "Kommentaren gemmes med det valgte element og et stabilt boganker.";
     const quote = document.querySelector("#composerQuote");
     quote.hidden = !target.selector?.exact;
     quote.textContent = target.selector?.exact ?? "";
@@ -188,17 +224,20 @@ export class AnnotationPanel {
     this.browser.hidden = true;
     this.composer.hidden = false;
     document.querySelector("#saveAnnotationButton").textContent = editingId ? "Gem ændring" : "Gem kommentar";
+    this.setSaving(false);
     this.open();
     window.setTimeout(() => this.comment.focus(), 80);
   }
 
   showBrowser() {
+    this.composerIntentId += 1;
     this.draft = null;
     this.editingId = null;
     this.composer.hidden = true;
     this.browser.hidden = false;
     this.form.reset();
     this.formError.hidden = true;
+    this.setSaving(false);
   }
 
   showFormError(message) {
@@ -207,8 +246,13 @@ export class AnnotationPanel {
   }
 
   setSaving(saving) {
+    this.saving = saving;
     document.querySelector("#saveAnnotationButton").disabled = saving;
     document.querySelector("#saveAnnotationButton").textContent = saving ? "Gemmer" : this.editingId ? "Gem ændring" : "Gem kommentar";
+    this.comment.disabled = saving;
+    this.category.disabled = saving;
+    document.querySelector("#composerBack").disabled = saving;
+    document.querySelector("#cancelAnnotationButton").disabled = saving;
   }
 
   async importFile(event) {
@@ -225,11 +269,6 @@ export class AnnotationPanel {
   }
 
   showToast(message, isError = false) {
-    const toast = document.querySelector("#toast");
-    toast.textContent = message;
-    toast.classList.toggle("is-error", isError);
-    toast.hidden = false;
-    window.clearTimeout(this.toastTimeout);
-    this.toastTimeout = window.setTimeout(() => { toast.hidden = true; }, 3200);
+    showUiToast(message, { error: isError });
   }
 }

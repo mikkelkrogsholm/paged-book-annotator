@@ -8,13 +8,13 @@ const reviewer = { kind: "user", id: "user-1", globalRole: "user", bookId: "book
 
 test("all access presets expose the intended reader and reviewer capabilities", () => {
   const cases = {
-    local: { guest: [true, true, true], reviewer: [true, true, true] },
-    publicRead: { guest: [true, false, false], reviewer: [true, false, false] },
-    publicOpenReview: { guest: [true, true, true], reviewer: [true, true, true] },
-    publicMemberReview: { guest: [true, false, true], reviewer: [true, true, true] },
-    publicInviteReview: { guest: [true, false, true], reviewer: [true, true, true] },
-    privateRead: { guest: [false, false, false], reviewer: [true, false, false] },
-    privateReview: { guest: [false, false, false], reviewer: [true, true, true] },
+    local: { guest: [true, true, true, true], reviewer: [true, true, true, true] },
+    publicRead: { guest: [true, false, false, false], reviewer: [true, false, false, false] },
+    publicOpenReview: { guest: [true, true, true, true], reviewer: [true, true, true, true] },
+    publicMemberReview: { guest: [true, false, true, false], reviewer: [true, true, true, true] },
+    publicInviteReview: { guest: [true, false, true, false], reviewer: [true, true, true, true] },
+    privateRead: { guest: [false, false, false, false], reviewer: [true, false, false, false] },
+    privateReview: { guest: [false, false, false, false], reviewer: [true, true, true, true] },
   };
 
   for (const [preset, expected] of Object.entries(cases)) {
@@ -22,7 +22,7 @@ test("all access presets expose the intended reader and reviewer capabilities", 
     for (const [name, principal] of Object.entries({ guest, reviewer })) {
       const capabilities = publicCapabilities(policy, principal, "book-1");
       assert.deepEqual(
-        [capabilities.canRead, capabilities.canCreateAnnotations, capabilities.canViewAnnotations],
+        [capabilities.canRead, capabilities.canCreateAnnotations, capabilities.canViewAnnotations, capabilities.canRespondToSurveys],
         expected[name],
         `${preset}/${name}`,
       );
@@ -54,7 +54,7 @@ test("explicit per-book grants and instance-admin tokens do not bleed across boo
   };
   assert.deepEqual(
     [...permissionsForPrincipal(multiBookUser, "book-a")].sort(),
-    ["annotations:write", "books:read", "progress:read:self"].sort(),
+    ["annotations:write", "books:read", "progress:read:self", "surveys:respond"].sort(),
   );
   assert.equal(permissionsForPrincipal(multiBookUser, "book-b").has("books:publish"), true);
   assert.deepEqual([...permissionsForPrincipal(multiBookUser, "book-c")], []);

@@ -10,8 +10,11 @@ book directory, not here.
 - `src/server/annotation-repository.mjs` owns validation and atomic storage.
 - `public/reader/book-reader.js` owns pagination display and navigation.
 - `public/annotations/` owns annotation anchoring, API calls and UI behavior.
-- `example/book/` is the canonical integration fixture.
-- `docs/manifest-and-anchors.md` is the public book integration contract.
+- `example/minimal-book/` is the canonical minimum bundle fixture.
+- `example/book/` is the canonical complete integration fixture.
+- `docs/book-bundle.md` and `schemas/book-viewer.bundle.v1.schema.json` are the
+  normative bundle contract and machine-readable manifest contract.
+- `docs/manifest-and-anchors.md` owns detailed anchoring behavior.
 
 Prefer explicit imports and feature-local tests. Do not add a frontend build
 tool or runtime dependency unless the feature cannot reasonably be built with
@@ -46,7 +49,13 @@ Run before finishing a change:
 ```sh
 bun run check
 bun run validate:example
+bun test scripts/pba-bundle.test.mjs
 ```
+
+For new or generated bundles, use `bun run bundle init`, `validate --json` and
+`pack`; do not hand-roll upload archives. New bundles and uploads are strict
+v1. Only migration from an existing configured `book.sourceDir` uses the
+documented legacy compatibility mode.
 
 For an integrated book, also run:
 

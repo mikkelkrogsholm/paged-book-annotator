@@ -44,6 +44,8 @@ export class AnnotationController {
     this.elementMode = false;
     this.hoverElement = null;
     this.pendingSelection = null;
+    this.elementTabIndexes = new Map();
+    this.selectionTimer = null;
     this.selectionAction = document.querySelector("#selectionAction");
   }
 
@@ -60,7 +62,11 @@ export class AnnotationController {
     await this.reload();
     const requestedId = new URLSearchParams(window.location.search).get("annotation");
     const requested = this.annotations.find((annotation) => annotation.id === requestedId);
-    if (requested) { this.panel.open(); this.navigate(requested); }
+    if (requested) {
+      this.navigate(requested, { closePanel: false });
+      this.panel.open();
+      this.panel.focusAnnotation(requested.id);
+    }
   }
 
   canEdit(annotation) {
@@ -69,6 +75,21 @@ export class AnnotationController {
 
   bindAnnotationActions() {
     this.reader.document.addEventListener("mouseup", () => this.captureSelection());
+    this.reader.document.addEventListener("selectionchange", () => {
+      window.clearTimeout(this.selectionTimer);
+      this.selectionTimer = window.setTimeout(() => this.captureSelection(), 0);
+    });
+    this.reader.document.addEventListener("keydown", (event) => {
+      if (this.elementMode && ["Enter", " "].includes(event.key)) this.captureElement(event);
+      if (!this.elementMode && event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        this.captureSelection();
+        if (this.pendingSelection) {
+          event.preventDefault();
+          this.panel.openComposer(this.pendingSelection);
+          this.hideSelectionAction();
+        }
+      }
+    });
     this.reader.document.addEventListener("click", (event) => this.captureElement(event), true);
     this.reader.document.addEventListener("pointermove", (event) => this.previewElementTarget(event));
     this.reader.document.addEventListener("pointerleave", () => this.setHoverElement(null));
@@ -81,6 +102,10 @@ export class AnnotationController {
     document.querySelector("#pageAnnotationButton").addEventListener("click", () => this.annotateCurrentPage());
     document.addEventListener("pointerdown", (event) => {
       if (!event.target.closest("#selectionAction")) this.hideSelectionAction();
+    });
+    this.reader.addEventListener("pagechange", () => {
+      this.pendingSelection = null;
+      this.hideSelectionAction();
     });
   }
 
@@ -129,7 +154,24 @@ export class AnnotationController {
     const button = document.querySelector("#elementModeButton");
     button.setAttribute("aria-pressed", String(enabled));
     button.classList.toggle("is-active", enabled);
-    this.panel.showToast(enabled ? "Klik på det element, du vil kommentere." : "Elementvalg er slået fra.");
+    this.setElementKeyboardTargets(enabled);
+    this.panel.showToast(enabled ? "Klik på et element, eller vælg det med Tab og tryk Enter." : "Elementvalg er slået fra.");
+    if (enabled) window.setTimeout(() => this.reader.units[this.reader.current]?.querySelector(viewerAnchorSelector)?.focus(), 0);
+  }
+
+  setElementKeyboardTargets(enabled) {
+    if (enabled) {
+      for (const element of this.reader.document.querySelectorAll(viewerAnchorSelector)) {
+        if (!this.elementTabIndexes.has(element)) this.elementTabIndexes.set(element, element.getAttribute("tabindex"));
+        element.tabIndex = 0;
+      }
+      return;
+    }
+    for (const [element, tabIndex] of this.elementTabIndexes) {
+      if (tabIndex == null) element.removeAttribute("tabindex");
+      else element.setAttribute("tabindex", tabIndex);
+    }
+    this.elementTabIndexes.clear();
   }
 
   setHoverElement(element) {
@@ -147,11 +189,19 @@ export class AnnotationController {
   captureSelection() {
     if (this.elementMode) return;
     const selection = this.reader.document.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      this.pendingSelection = null;
+      this.hideSelectionAction();
+      return;
+    }
     const range = selection.getRangeAt(0);
     const scope = sharedAnchorForRange(range);
     const exact = normalizeBookText(selection.toString());
-    if (!scope || !exact) return;
+    if (!scope || !exact) {
+      this.pendingSelection = null;
+      this.hideSelectionAction();
+      return;
+    }
 
     const scopeIndex = buildNormalizedTextIndex(scope);
     const approximateStart = selectionStartInScope(scope, range);
@@ -228,10 +278,8 @@ export class AnnotationController {
       let attached = false;
       let attachedScope = null;
       if (annotation.type === "page") {
-        attachedScope = annotation.target.scopeId
-          ? document.querySelector(`[data-viewer-anchor="${CSS.escape(annotation.target.scopeId)}"]`)
-          : null;
-        const page = attachedScope?.closest(".pagedjs_page") ?? this.reader.getPageByNumber(annotation.target.pageNumber);
+        attachedScope = document.querySelector(`[data-viewer-anchor="${CSS.escape(annotation.target.scopeId)}"]`);
+        const page = attachedScope?.closest(".pagedjs_page");
         if (page) {
           attached = true;
           if (annotation.status === "open") page.classList.add("has-page-annotation");
@@ -308,13 +356,13 @@ export class AnnotationController {
     return depth;
   }
 
-  navigate(annotation) {
+  navigate(annotation, { closePanel = true } = {}) {
     let pageNumber = annotation.target.pageNumber;
     if (annotation.target.scopeId) {
       const scope = this.reader.document.querySelector(`[data-viewer-anchor="${CSS.escape(annotation.target.scopeId)}"]`);
       pageNumber = this.reader.pageNumberForElement(scope) ?? pageNumber;
     }
     this.reader.goToPageNumber(pageNumber);
-    this.panel.close();
+    if (closePanel) this.panel.close();
   }
 }

@@ -28,6 +28,7 @@ test("draft builders preserve precise text, element and page targets", () => {
   const page = createPageAnnotationDraft({ scopeId: "stanza-001.poem", pageNumber: 14, label: "Side 14" });
   assert.equal(page.type, "page");
   assert.equal(page.target.pageNumber, 14);
+  assert.throws(() => createPageAnnotationDraft({ pageNumber: 14, label: "Side 14" }), /stabilt scope-id/);
 });
 
 test("a single visible character can be a text annotation", () => {

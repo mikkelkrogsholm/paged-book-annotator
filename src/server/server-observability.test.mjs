@@ -66,6 +66,24 @@ test("health and failures return correlated request IDs without logging request 
   assert.doesNotMatch(JSON.stringify(records), /query-secret|query-password|header-secret|cookie-secret|body-secret/);
 });
 
+test("health reports degraded storage as unavailable", async () => {
+  const response = await handleBookViewerRequest(new Request("http://localhost/api/health", {
+    headers: { Host: "localhost" },
+  }), {
+    config: testConfig(),
+    service: { bookId: "observability-book", health: async () => ({ collaboration: "ok", annotations: "unavailable" }) },
+    logger: createOperationalLogger({ sink: () => {} }),
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    status: "degraded",
+    bookId: "observability-book",
+    runtime: { name: "Bun", version: Bun.version },
+    schemas: { annotations: 4, collaboration: 4 },
+    storage: { collaboration: "ok", annotations: "unavailable" },
+  });
+});
+
 test("server lifecycle emits explicit startup and graceful shutdown records", async () => {
   const records = [];
   let repositoryClosed = false;

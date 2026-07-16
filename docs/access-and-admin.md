@@ -3,17 +3,17 @@
 Adgang konfigureres pr. bog med `access.preset`. Profilerne dækker de typiske
 lokale, offentlige og prøvelæserbaserede forløb:
 
-| Preset | Læsning | Opret annotation | Se annotationer | Oprettelse |
-| --- | --- | --- | --- | --- |
-| `local` | alle lokale kald | lokal ejer | alle | slået fra |
-| `publicRead` | alle | ingen | ingen | slået fra |
-| `publicOpenReview` | alle | alle gæster/brugere | alle | slået fra |
-| `publicMemberReview` | alle | login | egne/offentlige | åben |
-| `publicInviteReview` | alle | inviterede | egne/offentlige | invitation |
-| `privateRead` | inviterede | ingen | ingen | invitation |
-| `privateReview` | inviterede | inviterede | egne/offentlige | invitation |
+| Preset | Læsning | Opret annotation | Se annotationer | Survey | Oprettelse |
+| --- | --- | --- | --- | --- | --- |
+| `local` | alle lokale kald | lokal ejer | alle | lokal ejer | slået fra |
+| `publicRead` | alle | ingen | ingen | ingen | slået fra |
+| `publicOpenReview` | alle | alle gæster/brugere | alle | alle | slået fra |
+| `publicMemberReview` | alle | login | egne/offentlige | login | åben |
+| `publicInviteReview` | alle | inviterede | egne/offentlige | inviterede | invitation |
+| `privateRead` | inviterede | ingen | ingen | ingen | invitation |
+| `privateReview` | inviterede | inviterede | egne/offentlige | inviterede | invitation |
 
-Felterne `reading`, `annotationCreate`, `annotationView`, `registration`,
+Felterne `reading`, `annotationCreate`, `annotationView`, `surveyResponse`, `registration`,
 `progressTracking` og `localBypass` kan overskrives enkeltvis efter preset.
 Serveren validerer kombinationen ved opstart. Eksempel:
 
@@ -87,7 +87,9 @@ Et særskilt instansadministrator-token har alle rettigheder og kan blandt andet
 oprette brugere og bøger; kun lokal ejer eller en `instance_admin` kan udstede
 det.
 
-Offentlige annotationer uden login tilskrives en vedvarende pseudonym gæste-id.
+Offentlige annotationer uden login tilskrives et pseudonymt gæste-id med 30 dages
+cookielevetid; en gæst bør oprette en konto, hvis feedback skal kunne eksporteres
+eller slettes som én samlet datasubjektpakke.
 Brug `publicMemberReview` eller invitationsprofilerne, når en persons navn skal
 følge annotationen.
 
@@ -99,8 +101,9 @@ steder for den bog.
 
 Navn og e-mail er kontoens identitet. Telefon er valgfri og kræver et angivet
 formål. Kontodialogen kan eksportere brugerens konto-, medlemskabs-, progress-
-og annotationsdata. Ved sletning fjernes identitet, sessions, medlemskaber og
-progress, mens forfatterfeltet på eksisterende annotationer pseudonymiseres, så
+og annotationsdata. Ved sletning fjernes identitet, sessions, medlemskaber,
+progress og surveybesvarelser, mens forfatterfeltet på eksisterende annotationer
+pseudonymiseres med en tilfældig, ikke-linkbar tombstone, så
 det redaktionelle spor ikke mister indhold.
 
 ## Offentlig deling
@@ -124,6 +127,12 @@ en TLS-reverse proxy derfor:
   }
 }
 ```
+
+`localBypass` må ikke bruges med en almindelig `0.0.0.0`-binding: serveren
+afviser kombinationen ved opstart. Den medfølgende Compose-fil sætter den
+eksplicitte container-undtagelse, fordi porten samtidig publiceres som
+`127.0.0.1:…`. Sæt aldrig `PBA_ALLOW_NON_LOOPBACK_LOCAL_BYPASS=1`, hvis
+containerporten eller processen kan nås fra andre maskiner.
 
 Det bevarer den direkte lokale sikkerhedsgrænse. Viewerens `bun run data`
 leverer checksum-verificeret backup/restore. Rate limiting, TLS, overvågning og

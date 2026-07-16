@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/mikkelkrogsholm/paged-book-annotator/main/schemas/pba-survey.v1.schema.json",
+  "title": "Paged Book Annotator Survey V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "title", "description", "target", "trigger", "questions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "description": { "type": "string", "maxLength": 2000 },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "anchorId", "contextStartAnchorId", "pageNumberHint", "revisionId", "label"],
+      "properties": {
+        "kind": { "enum": ["page", "section"] },
+        "anchorId": { "$ref": "#/$defs/id" },
+        "contextStartAnchorId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "pageNumberHint": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "revisionId": { "type": ["string", "null"] },
+        "label": { "type": "string", "maxLength": 240 }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": { "mode": { "enum": ["afterLeave", "manual"] } }
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/question" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$", "maxLength": 100 },
+    "question": {
+      "type": "object",
+      "required": ["id", "type", "prompt", "helpText", "required"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "enum": ["rating", "singleChoice", "shortText", "longText"] },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "helpText": { "type": "string", "maxLength": 500 },
+        "required": { "type": "boolean" },
+        "scale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max", "minLabel", "maxLabel"],
+          "properties": {
+            "min": { "const": 1 }, "max": { "const": 5 },
+            "minLabel": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "maxLabel": { "type": "string", "minLength": 1, "maxLength": 100 }
+          }
+        },
+        "options": {
+          "type": "array", "minItems": 2, "maxItems": 7,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "label"],
+            "properties": { "id": { "$ref": "#/$defs/id" }, "label": { "type": "string", "minLength": 1, "maxLength": 200 } }
+          }
+        },
+        "maxLength": { "type": "integer", "minimum": 1, "maximum": 4000 }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "rating" } } }, "then": { "required": ["scale"] } },
+        { "if": { "properties": { "type": { "const": "singleChoice" } } }, "then": { "required": ["options"] } },
+        { "if": { "properties": { "type": { "enum": ["shortText", "longText"] } } }, "then": { "required": ["maxLength"] } }
+      ]
+    }
+  }
+}

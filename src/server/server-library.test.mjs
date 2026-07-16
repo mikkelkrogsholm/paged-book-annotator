@@ -62,7 +62,7 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
 
     const archiveBytes = await new Bun.Archive({
       "book-viewer.json": JSON.stringify({ schemaVersion: 1, book: { id: "second", title: "Anden bog", document: "book.html" } }),
-      "book.html": '<!doctype html><html><body><p data-book-anchor="second.chapter" data-annotation-text>Anden tekst</p></body></html>',
+      "book.html": '<!doctype html><html data-paged-complete="true"><body data-pre-paginated="true"><main class="pagedjs_pages"><section class="pagedjs_page"><p data-book-anchor="second.chapter" data-annotation-text>Anden tekst</p></section></main></body></html>',
     }).bytes();
     const archive = Bun.gzipSync(archiveBytes);
     const upload = await responseJson(await fetch(`${base}/api/admin/books/second/uploads`, jsonRequest("POST", { filename: "second.tar.gz", sizeBytes: archive.byteLength })));
@@ -106,19 +106,45 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
       target: { pageNumber: 1, scopeId: "second.chapter" },
     }, sessionCookie)));
     assert.equal(annotation.revisionId, validated.revision.id);
+    const surveyDraft = await responseJson(await fetch(`${base}/api/admin/books/second/surveys`, jsonRequest("POST", {
+      schemaVersion: 1,
+      title: "Feedback på anden bog",
+      description: "",
+      target: { kind: "section", anchorId: "second.chapter", pageNumberHint: 1, label: "Anden tekst" },
+      trigger: { mode: "afterLeave" },
+      questions: [{ id: "clarity", type: "rating", prompt: "Hvor let var teksten?", required: true, scale: { min: 1, max: 5, minLabel: "Svær", maxLabel: "Let" } }],
+    })));
+    assert.equal(surveyDraft.survey.status, "draft");
+    const publishedSurvey = await responseJson(await fetch(`${base}/api/admin/books/second/surveys/${surveyDraft.survey.id}/publish`, jsonRequest("POST", {})));
+    assert.equal(publishedSurvey.survey.published.definition.target.revisionId, validated.revision.id);
+    const activeSurveys = await responseJson(await fetch(`${base}/api/books/second/surveys`, { headers: { Cookie: sessionCookie } }));
+    assert.equal(activeSurveys.surveys.length, 1);
+    const surveyResponse = await responseJson(await fetch(`${base}/api/books/second/surveys/${surveyDraft.survey.id}/response`, jsonRequest("PUT", {
+      answers: [{ questionId: "clarity", value: 5 }],
+    }, sessionCookie)));
+    assert.equal(surveyResponse.response.answers[0].value, 5);
+    const adminSurveyResponses = await responseJson(await fetch(`${base}/api/admin/books/second/survey-responses`));
+    assert.equal(adminSurveyResponses.responses.length, 1);
+    const reviewExport = await responseJson(await fetch(`${base}/api/admin/books/second/review-export`));
+    assert.equal(reviewExport.kind, "paged-book-review-export");
+    assert.equal(reviewExport.surveyResponses.length, 1);
+    assert.equal(reviewExport.readingProgress.included, false);
     const bootstrapAnnotations = await responseJson(await fetch(`${base}/api/books/bootstrap/annotations`));
     assert.equal(bootstrapAnnotations.annotations.length, 0);
     const accountExport = await responseJson(await fetch(`${base}/api/books/second/account/export`, { headers: { Cookie: sessionCookie } }));
     assert.equal(accountExport.annotations.length, 1);
+    assert.equal(accountExport.surveyResponses.length, 1);
     await responseJson(await fetch(`${base}/api/books/second/account`, { method: "DELETE", headers: { Cookie: sessionCookie } }));
     const erasedAnnotations = await responseJson(await fetch(`${base}/api/admin/books/second/annotations`));
     assert.equal(erasedAnnotations.annotations[0].author.kind, "erased");
+    assert.equal((await responseJson(await fetch(`${base}/api/admin/books/second/survey-responses`))).responses.length, 0);
 
     const audit = await responseJson(await fetch(`${base}/api/admin/books/second/audit`));
     const actions = new Set(audit.events.map((event) => event.action));
     for (const action of [
       "book_revision.validate", "book_revision.publish", "access.update",
       "access_code.create", "access_code.accept", "annotation.create",
+      "survey.create", "survey.publish", "survey_response.submit", "review_export.create",
     ]) assert.equal(actions.has(action), true, `Manglende audit-event: ${action}`);
     assert.equal(running.platform.collaboration.database.query(
       "SELECT COUNT(*) AS count FROM audit_events WHERE action = 'user.erase' AND book_id IS NULL",

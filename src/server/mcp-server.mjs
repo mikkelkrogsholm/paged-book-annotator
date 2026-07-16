@@ -3,31 +3,37 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as z from "zod/v4";
 
 import { createOperationalLogger } from "./operational-logger.mjs";
+import { MCP_TOOL_CONTRACTS, mcpToolError } from "./mcp-tool-contracts.mjs";
+import {
+  MCP_TOOL_OUTPUT_SCHEMAS,
+  annotationIdSchema,
+  annotationTargetSchema,
+  bookIdSchema,
+  createAnnotationInputSchema,
+  surveyAnswersInputSchema,
+  surveyDefinitionInputSchema,
+  surveyIdSchema,
+} from "./mcp-contract-schemas.mjs";
+import { PERMISSIONS } from "./access-policy.mjs";
+
+export { MCP_TOOL_CONTRACTS } from "./mcp-tool-contracts.mjs";
 
 const silentLogger = createOperationalLogger({ level: "silent" });
+const bundleContractDocument = new URL("../../docs/book-bundle.md", import.meta.url);
+const bundleSchemaDocument = new URL("../../schemas/book-viewer.bundle.v1.schema.json", import.meta.url);
+const surveySchemaDocument = new URL("../../schemas/pba-survey.v1.schema.json", import.meta.url);
+const reviewExportSchemaDocument = new URL("../../schemas/pba-review-export.v1.schema.json", import.meta.url);
+const mcpDocumentation = new URL("../../docs/mcp.md", import.meta.url);
+const packageMetadata = await Bun.file(new URL("../../package.json", import.meta.url)).json();
 
 const READ_ONLY = Object.freeze({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
 const ADDITIVE = Object.freeze({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
+const NON_IDEMPOTENT_WRITE = Object.freeze({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
 const IDEMPOTENT_WRITE = Object.freeze({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
 const DESTRUCTIVE = Object.freeze({ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
+const DESTRUCTIVE_NON_IDEMPOTENT = Object.freeze({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false });
 
-const bookIdSchema = z.string().trim().min(1).describe("Stable book id from list_books.");
-const annotationIdSchema = z.string().trim().min(1);
-const annotationTargetSchema = z.object({
-  scopeId: z.string().optional(),
-  pageNumber: z.number().int().positive(),
-  label: z.string().optional(),
-  selector: z.unknown().optional(),
-});
-const annotationDraftSchema = {
-  type: z.enum(["text", "element", "page"]),
-  target: annotationTargetSchema,
-  comment: z.string().trim().min(1),
-  status: z.enum(["open", "resolved", "accepted", "rejected"]).optional(),
-  category: z.enum(["general", "language", "structure", "fact", "design"]).optional(),
-  anchorState: z.enum(["attached", "orphaned"]).optional(),
-  visibility: z.enum(["private", "reviewGroup", "public"]).optional(),
-};
+const permissionSchema = z.enum(PERMISSIONS).describe("Exact permission from pba://contracts/mcp-tools/v1.");
 
 function result(data) {
   const structuredContent = Array.isArray(data) ? { items: data } : data == null ? { value: null } : data;
@@ -36,6 +42,10 @@ function result(data) {
 
 function textResource(uri, value) {
   return { contents: [{ uri: String(uri), mimeType: "application/json", text: JSON.stringify(value, null, 2) }] };
+}
+
+function rawTextResource(uri, mimeType, text) {
+  return { contents: [{ uri: String(uri), mimeType, text }] };
 }
 
 function itemsFrom(value, property = "items") {
@@ -56,7 +66,7 @@ function operationBookId(arguments_) {
 }
 
 function instrumentMcpRegistrations(server, { logger, principal, createRequestId, monotonicClock }) {
-  const wrap = (operation, handler) => async (...arguments_) => {
+  const wrap = (operation, handler, toolContract = null) => async (...arguments_) => {
     const requestId = createRequestId();
     const startedAt = monotonicClock();
     const bookId = operationBookId(arguments_);
@@ -74,6 +84,7 @@ function instrumentMcpRegistrations(server, { logger, principal, createRequestId
         errorName: error instanceof Error ? error.name : typeof error,
         errorCode: error?.code == null ? undefined : String(error.code),
       });
+      if (toolContract) return { ...result(mcpToolError(error, { requestId })), isError: true };
       throw error;
     } finally {
       logger.info("mcp.completed", {
@@ -89,10 +100,20 @@ function instrumentMcpRegistrations(server, { logger, principal, createRequestId
   const registerResource = server.registerResource.bind(server);
   const registerTool = server.registerTool.bind(server);
   server.registerResource = (name, uri, options, handler) => registerResource(name, uri, options, wrap(`resource:${name}`, handler));
-  server.registerTool = (name, options, handler) => registerTool(name, options, wrap(`tool:${name}`, handler));
+  server.registerTool = (name, options, handler) => {
+    const contract = MCP_TOOL_CONTRACTS[name];
+    if (!contract) throw new TypeError(`MCP tool ${name} mangler en agentkontrakt.`);
+    const outputSchema = options.outputSchema ?? MCP_TOOL_OUTPUT_SCHEMAS[name];
+    if (!outputSchema) throw new TypeError(`MCP tool ${name} mangler et eksplicit outputSchema.`);
+    return registerTool(name, {
+      ...options,
+      outputSchema,
+      _meta: { ...(options._meta ?? {}), "pba/toolContract": contract },
+    }, wrap(`tool:${name}`, handler, contract));
+  };
 }
 
-function createServiceAdapter({ service, principal, config }) {
+function createServiceAdapter({ service, principal, principalProvider, config }) {
   const legacyBook = {
     id: service.bookId ?? config?.book?.id,
     title: config?.book?.title,
@@ -112,36 +133,47 @@ function createServiceAdapter({ service, principal, config }) {
     if (!legacyBook.id || bookId !== legacyBook.id) throw new TypeError(`Unknown book: ${bookId}`);
   }
 
+  async function currentPrincipal() {
+    return principalProvider ? principalProvider() : principal;
+  }
+
   return {
     isMultiBook,
     async listBooks() {
-      if (!isMultiBook) return [legacyBook];
-      return itemsFrom(await service.listBooks(principal), "books");
+      const activePrincipal = await currentPrincipal();
+      if (!isMultiBook) {
+        requireMethod("assertCanRead")(activePrincipal);
+        return [legacyBook];
+      }
+      return itemsFrom(await service.listBooks(activePrincipal), "books");
     },
     async getBook(bookId) {
       if (!isMultiBook) {
         assertLegacyBook(bookId);
+        requireMethod("assertCanRead")(await currentPrincipal());
         return legacyBook;
       }
-      return requireMethod("getBook")(principal, bookId);
+      return requireMethod("getBook")(await currentPrincipal(), bookId);
     },
     async catalog(name, ...arguments_) {
       if (!isMultiBook) throw new TypeError(`${name} requires the managed multi-book library.`);
-      return requireMethod(name)(principal, ...arguments_);
+      return requireMethod(name)(await currentPrincipal(), ...arguments_);
     },
     async book(name, bookId, ...arguments_) {
+      const activePrincipal = await currentPrincipal();
       if (!isMultiBook) {
         assertLegacyBook(bookId);
-        return requireMethod(name)(principal, ...arguments_);
+        return requireMethod(name)(activePrincipal, ...arguments_);
       }
-      return requireMethod(name)(principal, bookId, ...arguments_);
+      return requireMethod(name)(activePrincipal, bookId, ...arguments_);
     },
     async global(name, ...arguments_) {
-      return requireMethod(name)(principal, ...arguments_);
+      return requireMethod(name)(await currentPrincipal(), ...arguments_);
     },
-    session(bookId) {
-      if (isMultiBook && typeof service.sessionForBook === "function") return service.sessionForBook(principal, bookId);
-      return typeof service.session === "function" ? service.session(principal, bookId) : undefined;
+    async session(bookId) {
+      const activePrincipal = await currentPrincipal();
+      if (isMultiBook && typeof service.sessionForBook === "function") return service.sessionForBook(activePrincipal, bookId);
+      return typeof service.session === "function" ? service.session(activePrincipal, bookId) : undefined;
     },
   };
 }
@@ -154,12 +186,65 @@ function registerLibraryResources(server, adapter) {
   });
 
   server.registerResource(
+    "book-bundle-contract",
+    "pba://contracts/book-bundle/v1",
+    {
+      title: "Paged Book Bundle Contract v1",
+      description: "Normative, self-contained instructions for generating, validating and packaging a book bundle.",
+      mimeType: "text/markdown",
+    },
+    async (uri) => rawTextResource(uri, "text/markdown", await Bun.file(bundleContractDocument).text()),
+  );
+  server.registerResource(
+    "book-bundle-schema",
+    "pba://schemas/book-viewer.bundle.v1.json",
+    {
+      title: "Paged Book Bundle manifest schema v1",
+      description: "JSON Schema 2020-12 for the strict book-viewer.json manifest.",
+      mimeType: "application/schema+json",
+    },
+    async (uri) => rawTextResource(uri, "application/schema+json", await Bun.file(bundleSchemaDocument).text()),
+  );
+  server.registerResource(
+    "mcp-agent-guide",
+    "pba://docs/mcp/v1",
+    {
+      title: "Paged Book Annotator MCP agent guide",
+      description: "Complete workflows, permissions, errors and tool contracts for agents.",
+      mimeType: "text/markdown",
+    },
+    async (uri) => rawTextResource(uri, "text/markdown", await Bun.file(mcpDocumentation).text()),
+  );
+  server.registerResource(
+    "mcp-tool-contracts",
+    "pba://contracts/mcp-tools/v1",
+    {
+      title: "MCP tool contracts V1",
+      description: "Machine-readable purpose, permissions, effects, errors, examples and workflow for every tool.",
+      mimeType: "application/json",
+    },
+    async (uri) => textResource(uri, { schemaVersion: 1, tools: MCP_TOOL_CONTRACTS }),
+  );
+  server.registerResource(
+    "survey-schema",
+    "pba://schemas/survey.v1.json",
+    { title: "Survey schema V1", description: "JSON Schema for immutable survey definitions.", mimeType: "application/schema+json" },
+    async (uri) => rawTextResource(uri, "application/schema+json", await Bun.file(surveySchemaDocument).text()),
+  );
+  server.registerResource(
+    "review-export-schema",
+    "pba://schemas/review-export.v1.json",
+    { title: "Review export schema V1", description: "JSON Schema for combined annotations, surveys, responses and optional progress.", mimeType: "application/schema+json" },
+    async (uri) => rawTextResource(uri, "application/schema+json", await Bun.file(reviewExportSchemaDocument).text()),
+  );
+
+  server.registerResource(
     "book-metadata",
     new ResourceTemplate("book://{bookId}/metadata", { list: bookResources }),
     { title: "Book metadata", description: "Metadata and effective session for one accessible book.", mimeType: "application/json" },
     async (uri, { bookId }) => {
       const book = await adapter.getBook(bookId);
-      return textResource(uri, { book, session: adapter.session(bookId) });
+      return textResource(uri, { book, session: await adapter.session(bookId) });
     },
   );
   server.registerResource(
@@ -173,6 +258,12 @@ function registerLibraryResources(server, adapter) {
     new ResourceTemplate("book://{bookId}/progress", { list: undefined }),
     { title: "Reading progress", description: "This principal's reading progress in one book.", mimeType: "application/json" },
     async (uri, { bookId }) => textResource(uri, await adapter.book("getProgress", bookId)),
+  );
+  server.registerResource(
+    "book-surveys",
+    new ResourceTemplate("book://{bookId}/surveys", { list: undefined }),
+    { title: "Active surveys", description: "Published surveys for the active revision that this principal can answer.", mimeType: "application/json" },
+    async (uri, { bookId }) => textResource(uri, { surveys: await adapter.book("listActiveSurveys", bookId) }),
   );
 }
 
@@ -188,7 +279,7 @@ function registerLibraryTools(server, adapter) {
     description: "Get one visible book and the token's effective access in that book.",
     inputSchema: { bookId: bookIdSchema },
     annotations: READ_ONLY,
-  }, async ({ bookId }) => result({ book: await adapter.getBook(bookId), session: adapter.session(bookId) }));
+  }, async ({ bookId }) => result({ book: await adapter.getBook(bookId), session: await adapter.session(bookId) }));
 
   server.registerTool("create_book", {
     title: "Create book",
@@ -218,7 +309,7 @@ function registerLibraryTools(server, adapter) {
     title: "Validate book upload",
     description: "Validate a completed staged upload without changing the active book revision.",
     inputSchema: { bookId: bookIdSchema, uploadId: z.string().trim().min(1) },
-    annotations: IDEMPOTENT_WRITE,
+    annotations: NON_IDEMPOTENT_WRITE,
   }, async ({ bookId, uploadId }) => result(await adapter.catalog("validateBookUpload", bookId, uploadId)));
 
   server.registerTool("list_book_revisions", {
@@ -239,7 +330,7 @@ function registerLibraryTools(server, adapter) {
     title: "Archive book",
     description: "Archive a book so readers can no longer open it. Stored revisions and review data are retained.",
     inputSchema: { bookId: bookIdSchema },
-    annotations: DESTRUCTIVE,
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT,
   }, async ({ bookId }) => result({ book: await adapter.catalog("archiveBook", bookId) }));
 }
 
@@ -249,7 +340,7 @@ function registerReadingTools(server, adapter) {
     description: "Return book metadata and the token's effective capabilities for this book.",
     inputSchema: { bookId: bookIdSchema },
     annotations: READ_ONLY,
-  }, async ({ bookId }) => result({ book: await adapter.getBook(bookId), session: adapter.session(bookId) }));
+  }, async ({ bookId }) => result({ book: await adapter.getBook(bookId), session: await adapter.session(bookId) }));
   server.registerTool("list_book_outline", {
     title: "List book outline",
     description: "List stable heading anchors with cursor pagination.",
@@ -276,7 +367,7 @@ function registerReadingTools(server, adapter) {
   }, async ({ bookId, annotationId }) => result({ context: await adapter.book("getAnnotationContext", bookId, annotationId) }));
   server.registerTool("list_changes_since", {
     title: "List changes since",
-    description: "List visible annotation changes in one book after an ISO timestamp.",
+    description: "Synchronize visible annotation upserts with a stable keyset cursor. Deletion tombstones are returned only to annotations:read:all or annotations:moderate callers.",
     inputSchema: { bookId: bookIdSchema, since: z.iso.datetime().optional(), cursor: z.string().optional(), limit: z.number().int().min(1).max(100).optional() },
     annotations: READ_ONLY,
   }, async ({ bookId, ...options }) => result(await adapter.book("listChangesSince", bookId, options)));
@@ -310,14 +401,25 @@ function registerAnnotationTools(server, adapter) {
   server.registerTool("create_annotation", {
     title: "Create annotation",
     description: "Create an attributed text, element or page annotation in one book.",
-    inputSchema: { bookId: bookIdSchema, ...annotationDraftSchema },
+    inputSchema: createAnnotationInputSchema,
     annotations: ADDITIVE,
   }, async ({ bookId, ...input }) => result(await adapter.book("createAnnotation", bookId, input)));
   server.registerTool("update_annotation", {
     title: "Update annotation",
     description: "Update an owned annotation, or any annotation with moderation permission.",
-    inputSchema: { bookId: bookIdSchema, id: annotationIdSchema, changes: z.record(z.string(), z.unknown()) },
-    annotations: IDEMPOTENT_WRITE,
+    inputSchema: {
+      bookId: bookIdSchema,
+      id: annotationIdSchema,
+      changes: z.object({
+        comment: z.string().trim().min(1).optional(),
+        status: z.enum(["open", "resolved", "accepted", "rejected"]).optional(),
+        category: z.enum(["general", "language", "structure", "fact", "design"]).optional(),
+        visibility: z.enum(["private", "reviewGroup", "public"]).optional(),
+        anchorState: z.enum(["attached", "orphaned"]).optional(),
+        target: annotationTargetSchema.optional(),
+      }).refine((changes) => Object.keys(changes).length > 0, "changes must contain at least one field"),
+    },
+    annotations: DESTRUCTIVE,
   }, async ({ bookId, id, changes }) => result({ annotation: await adapter.book("updateAnnotation", bookId, id, changes) }));
   server.registerTool("delete_annotation", {
     title: "Delete annotation",
@@ -333,7 +435,7 @@ function registerAnnotationTools(server, adapter) {
   }, async ({ bookId, format }) => result(await adapter.book("exportAnnotations", bookId, format)));
   server.registerTool("import_annotations", {
     title: "Import annotations",
-    description: "Merge or replace a validated schema 1/2/3 annotation document in one book. Replace is destructive.",
+    description: "Merge or replace a validated schema 1/2/3/4 annotation document in one book. Replace is destructive.",
     inputSchema: { bookId: bookIdSchema, document: z.record(z.string(), z.unknown()), mode: z.enum(["merge", "replace"]).default("merge") },
     annotations: DESTRUCTIVE,
   }, async ({ bookId, document, mode }) => result(await adapter.book("importAnnotations", bookId, document, mode)));
@@ -357,7 +459,7 @@ function registerProgressTools(server, adapter) {
       buildId: z.string().optional(),
       event: z.enum(["position", "engaged", "complete"]).optional(),
     },
-    annotations: IDEMPOTENT_WRITE,
+    annotations: NON_IDEMPOTENT_WRITE,
   }, async ({ bookId, ...input }) => result({ progress: await adapter.book("saveProgress", bookId, input) }));
   server.registerTool("list_reader_progress", {
     title: "List reader progress",
@@ -365,6 +467,81 @@ function registerProgressTools(server, adapter) {
     inputSchema: { bookId: bookIdSchema },
     annotations: READ_ONLY,
   }, async ({ bookId }) => result(await adapter.book("listAllProgress", bookId)));
+}
+
+function registerSurveyTools(server, adapter) {
+  server.registerTool("list_active_surveys", {
+    title: "List active surveys",
+    description: "List published surveys bound to the active immutable book revision that this principal may answer.",
+    inputSchema: { bookId: bookIdSchema },
+    annotations: READ_ONLY,
+  }, async ({ bookId }) => result({ surveys: await adapter.book("listActiveSurveys", bookId) }));
+  server.registerTool("get_survey", {
+    title: "Get survey",
+    description: "Read one active survey including its stable anchor target, version and complete question definitions.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema },
+    annotations: READ_ONLY,
+  }, async ({ bookId, surveyId }) => result({ survey: await adapter.book("getSurvey", bookId, surveyId) }));
+  server.registerTool("get_my_survey_response", {
+    title: "Get my survey response",
+    description: "Return this principal's response for the survey's published version and current book revision, if any.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema },
+    annotations: READ_ONLY,
+  }, async ({ bookId, surveyId }) => result({ response: await adapter.book("getMySurveyResponse", bookId, surveyId) }));
+  server.registerTool("submit_survey_response", {
+    title: "Submit survey response",
+    description: "Create or replace exactly one response for this principal, survey version and book revision; answers are validated against the immutable question snapshot.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema, answers: surveyAnswersInputSchema },
+    annotations: DESTRUCTIVE,
+  }, async ({ bookId, surveyId, answers }) => result({ response: await adapter.book("submitSurveyResponse", bookId, surveyId, answers) }));
+  server.registerTool("list_surveys", {
+    title: "List surveys",
+    description: "List draft, published and closed surveys with every immutable version for one book.",
+    inputSchema: { bookId: bookIdSchema },
+    annotations: READ_ONLY,
+  }, async ({ bookId }) => result({ surveys: await adapter.book("listSurveys", bookId) }));
+  server.registerTool("create_survey", {
+    title: "Create survey",
+    description: "Create survey version 1 as a draft. Use a stable data-book-anchor; pageNumberHint is informational only.",
+    inputSchema: { bookId: bookIdSchema, definition: surveyDefinitionInputSchema },
+    annotations: ADDITIVE,
+  }, async ({ bookId, definition }) => result({ survey: await adapter.book("createSurvey", bookId, definition) }));
+  server.registerTool("update_survey_draft", {
+    title: "Update survey draft",
+    description: "Replace the complete draft definition. Updating a published survey creates a new draft version without mutating the published version.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema, definition: surveyDefinitionInputSchema },
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT,
+  }, async ({ bookId, surveyId, definition }) => result({ survey: await adapter.book("updateSurveyDraft", bookId, surveyId, definition) }));
+  server.registerTool("publish_survey", {
+    title: "Publish survey",
+    description: "Publish the current draft immutably and bind it to the active book revision.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema },
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT,
+  }, async ({ bookId, surveyId }) => result({ survey: await adapter.book("publishSurvey", bookId, surveyId) }));
+  server.registerTool("close_survey", {
+    title: "Close survey",
+    description: "Close a survey so readers and agents can no longer create or change responses; existing responses remain exportable.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema },
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT,
+  }, async ({ bookId, surveyId }) => result({ survey: await adapter.book("closeSurvey", bookId, surveyId) }));
+  server.registerTool("list_survey_responses", {
+    title: "List survey responses",
+    description: "List pseudonymized responses with survey version, book revision, stable target and timestamps. Free text is returned only to authorized callers and never logged.",
+    inputSchema: { bookId: bookIdSchema, surveyId: surveyIdSchema.optional() },
+    annotations: READ_ONLY,
+  }, async ({ bookId, surveyId }) => result({ responses: await adapter.book("listSurveyResponses", bookId, { surveyId }) }));
+  server.registerTool("export_review_bundle", {
+    title: "Export review bundle",
+    description: "Return review-export V1 with annotations, all survey versions, survey responses and optional reading progress. Read pba://schemas/review-export.v1.json first.",
+    inputSchema: {
+      bookId: bookIdSchema,
+      includeProgress: z.boolean().default(false).describe("Requires progress:read:all when true."),
+    },
+    annotations: READ_ONLY,
+  }, async ({ bookId, includeProgress }) => {
+    const exported = await adapter.book("exportReviewBundle", bookId, { includeProgress });
+    return result(exported.document);
+  });
 }
 
 function registerAdministrationTools(server, adapter) {
@@ -392,14 +569,20 @@ function registerAdministrationTools(server, adapter) {
     inputSchema: {
       bookId: bookIdSchema,
       preset: z.enum(["local", "publicRead", "publicOpenReview", "publicMemberReview", "publicInviteReview", "privateRead", "privateReview"]),
-      enrollment: z.enum(["open", "invite", "code", "closed"]).optional(),
+      reading: z.enum(["public", "authenticated", "invited"]).optional(),
+      annotationCreate: z.enum(["disabled", "public", "authenticated", "invited"]).optional(),
+      annotationView: z.enum(["none", "own", "reviewGroup", "public"]).optional(),
+      surveyResponse: z.enum(["disabled", "public", "authenticated", "invited"]).optional(),
+      registration: z.enum(["disabled", "closed", "open", "inviteOnly", "code"]).optional(),
+      progressTracking: z.enum(["off", "resume", "analytics"]).optional(),
+      localBypass: z.boolean().optional(),
     },
     annotations: IDEMPOTENT_WRITE,
   }, async ({ bookId, ...input }) => result(await adapter.book("updateAccessSettings", bookId, input)));
   server.registerTool("create_user", {
     title: "Create user",
     description: "Create a local identity and optionally grant access to one book. Phone is optional and requires a stated purpose.",
-    inputSchema: {
+    inputSchema: z.object({
       email: z.email(),
       displayName: z.string().trim().min(1),
       phone: z.string().trim().min(3).max(40).optional(),
@@ -408,30 +591,38 @@ function registerAdministrationTools(server, adapter) {
       globalRole: z.enum(["instance_admin", "user"]).optional(),
       bookId: bookIdSchema.optional(),
       bookRole: z.enum(["book_admin", "publisher", "editor", "reviewer", "reader"]).optional(),
-    },
+    }).superRefine((input, context) => {
+      if (input.phone && !input.phonePurpose) context.addIssue({ code: "custom", path: ["phonePurpose"], message: "phonePurpose is required when phone is provided" });
+      if (input.bookRole && !input.bookId) context.addIssue({ code: "custom", path: ["bookId"], message: "bookId is required when bookRole is provided" });
+    }),
     annotations: ADDITIVE,
   }, async (input) => {
-    if (input.phone && !input.phonePurpose) throw new TypeError("phonePurpose is required when phone is provided.");
     return result(await adapter.global("createUser", input));
   });
   server.registerTool("update_user_access", {
     title: "Update user access",
     description: "Change a global role/status or one book membership. Protects the final active administrator.",
-    inputSchema: {
+    inputSchema: z.object({
       userId: z.string().trim().min(1),
       bookId: bookIdSchema.optional(),
       globalRole: z.enum(["instance_admin", "user"]).optional(),
       bookRole: z.enum(["book_admin", "publisher", "editor", "reviewer", "reader"]).nullable().optional(),
-      permissions: z.array(z.string().trim().min(1)).optional(),
+      permissions: z.array(permissionSchema).optional(),
       status: z.enum(["active", "disabled"]).optional(),
-    },
-    annotations: IDEMPOTENT_WRITE,
+    }).superRefine((input, context) => {
+      const changes = [input.globalRole, input.bookRole, input.permissions, input.status];
+      if (changes.every((value) => value === undefined)) context.addIssue({ code: "custom", message: "at least one access field is required" });
+      if ((input.bookRole !== undefined || input.permissions !== undefined) && !input.bookId) {
+        context.addIssue({ code: "custom", path: ["bookId"], message: "bookId is required for membership changes" });
+      }
+    }),
+    annotations: DESTRUCTIVE,
   }, async ({ userId, ...changes }) => result(await adapter.global("updateUser", userId, changes)));
   server.registerTool("reset_user_password", {
     title: "Reset user password",
     description: "Set a new local password and revoke the user's sessions.",
     inputSchema: { userId: z.string().trim().min(1), newPassword: z.string().min(10) },
-    annotations: DESTRUCTIVE,
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT,
   }, async ({ userId, newPassword }) => result(await adapter.global("resetUserPassword", userId, newPassword)));
   server.registerTool("create_invitation", {
     title: "Create book invitation",
@@ -441,6 +632,7 @@ function registerAdministrationTools(server, adapter) {
       email: z.email(),
       displayName: z.string().trim().min(1).optional(),
       role: z.enum(["book_admin", "publisher", "editor", "reviewer", "reader"]).optional(),
+      permissions: z.array(permissionSchema).optional(),
       expiresInHours: z.number().int().min(1).max(8760).optional(),
     },
     annotations: ADDITIVE,
@@ -464,6 +656,7 @@ function registerAdministrationTools(server, adapter) {
       bookId: bookIdSchema,
       name: z.string().trim().min(1).max(100),
       role: z.enum(["book_admin", "publisher", "editor", "reviewer", "reader"]).default("reviewer"),
+      permissions: z.array(permissionSchema).optional(),
       expiresInHours: z.number().int().min(1).max(8760).optional(),
       maxUses: z.number().int().min(1).max(10_000).optional(),
     },
@@ -481,16 +674,40 @@ function registerAdministrationTools(server, adapter) {
     inputSchema: { bookId: bookIdSchema, id: z.string().trim().min(1) },
     annotations: DESTRUCTIVE,
   }, async ({ bookId, id }) => result({ revoked: await adapter.book("revokeAccessCode", bookId, id) }));
+  const serviceTokenIdentityInput = {
+    name: z.string().trim().min(1),
+    expiresInHours: z.number().min(1).max(8760).optional(),
+    actorUserId: z.string().nullable().optional(),
+  };
   server.registerTool("create_service_token", {
     title: "Create service token",
     description: "Create a scoped, expiring token with optional grants for one or more books. Plaintext is returned once.",
-    inputSchema: {
-      name: z.string().trim().min(1),
-      scopes: z.array(z.string().trim().min(1)).min(1),
-      bookIds: z.array(bookIdSchema).min(1).optional(),
-      expiresInHours: z.number().min(1).max(8760).optional(),
-      actorUserId: z.string().nullable().optional(),
-    },
+    inputSchema: z.union([
+      z.object({
+        ...serviceTokenIdentityInput,
+        instanceAdmin: z.literal(true),
+      }),
+      z.object({
+        ...serviceTokenIdentityInput,
+        instanceAdmin: z.literal(false).optional(),
+        scopes: z.array(permissionSchema).min(1),
+        bookIds: z.array(bookIdSchema).min(1).refine(
+          (bookIds) => new Set(bookIds).size === bookIds.length,
+          "bookIds must be unique",
+        ),
+      }),
+      z.object({
+        ...serviceTokenIdentityInput,
+        instanceAdmin: z.literal(false).optional(),
+        grants: z.array(z.object({
+          bookId: bookIdSchema,
+          permissions: z.array(permissionSchema).min(1),
+        })).min(1).refine(
+          (grants) => new Set(grants.map((grant) => grant.bookId)).size === grants.length,
+          "grant bookIds must be unique",
+        ),
+      }),
+    ]),
     annotations: ADDITIVE,
   }, async (input) => result(await adapter.global("createToken", input)));
   server.registerTool("list_service_tokens", {
@@ -501,10 +718,10 @@ function registerAdministrationTools(server, adapter) {
   }, async ({ bookId }) => result(await adapter.global("listTokens", bookId ? { bookId } : undefined)));
   server.registerTool("revoke_service_token", {
     title: "Revoke service token",
-    description: "Immediately revoke a service token across every book grant.",
-    inputSchema: { id: z.string().trim().min(1) },
+    description: "Immediately revoke a service token. Non-instance administrators must supply the bookId whose token-management grant authorizes the operation.",
+    inputSchema: { id: z.string().trim().min(1), bookId: bookIdSchema.optional() },
     annotations: DESTRUCTIVE,
-  }, async ({ id }) => result({ revoked: await adapter.global("revokeToken", id) }));
+  }, async ({ id, bookId }) => result({ revoked: await adapter.global("revokeToken", id, { bookId }) }));
   server.registerTool("list_audit_events", {
     title: "List audit events",
     description: "List mutation events, optionally limited to one book.",
@@ -516,22 +733,35 @@ function registerAdministrationTools(server, adapter) {
 export function createPagedBookMcpServer({
   service,
   principal,
+  principalProvider,
   config,
+  transport = "http",
   logger = silentLogger,
   createRequestId = () => `mcp-${Bun.randomUUIDv7()}`,
   monotonicClock = () => performance.now(),
 }) {
   const server = new McpServer(
-    { name: "paged-book-annotator", version: "0.2.0" },
-    { instructions: "Call list_books first. Pass bookId to every book-specific tool. For uploads: create_book_upload, HTTP PUT the tar.gz to uploadUrl, validate_book_upload, then publish_book_revision." },
+    { name: "paged-book-annotator", version: String(packageMetadata.version) },
+    { instructions: [
+      "Start with pba://docs/mcp/v1 and pba://contracts/mcp-tools/v1, then call list_books.",
+      "Pass bookId to every book-specific tool.",
+      "Domain failures handled by a tool return error.code, retryable, suggestedAction and requestId; SDK input validation errors may be protocol/text errors without structuredContent.",
+      "Before generating a book bundle, read pba://contracts/book-bundle/v1 and pba://schemas/book-viewer.bundle.v1.json.",
+      "Upload workflow: create_book_upload, authenticated HTTP PUT to uploadUrl on the configured PBA HTTP server, validate_book_upload, then publish_book_revision.",
+      "Pending upload metadata is persisted, so create/validate MCP calls may use stdio while the PUT uses the HTTP server sharing the configured data directory.",
+      "Survey workflow: list_active_surveys, get_survey, get_my_survey_response, then submit_survey_response.",
+      "Review export schema is pba://schemas/review-export.v1.json.",
+      "List tools without pagination return authorization-filtered, installation-bounded collections; use their filters before consuming the result.",
+    ].join(" ") },
   );
   instrumentMcpRegistrations(server, { logger, principal, createRequestId, monotonicClock });
-  const adapter = createServiceAdapter({ service, principal, config });
+  const adapter = createServiceAdapter({ service, principal, principalProvider, config });
   registerLibraryResources(server, adapter);
   registerLibraryTools(server, adapter);
   registerReadingTools(server, adapter);
   registerAnnotationTools(server, adapter);
   registerProgressTools(server, adapter);
+  registerSurveyTools(server, adapter);
   registerAdministrationTools(server, adapter);
   return server;
 }
@@ -541,8 +771,8 @@ export async function handleMcpHttpRequest(request, { service, config, bearerTok
   let principal;
   try {
     principal = await service.resolvePrincipal({ bearerToken });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 401, headers: { "Content-Type": "application/json" } });
+  } catch {
+    return new Response(JSON.stringify({ error: "MCP-tokenet er ugyldigt, udløbet eller tilbagekaldt." }), { status: 401, headers: { "Content-Type": "application/json" } });
   }
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   const server = createPagedBookMcpServer({ service, principal, config, logger });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "bun:test";
@@ -37,6 +37,19 @@ test("library application isolates book services, annotations and memberships", 
     const local = { kind: "local", id: "local-owner", displayName: "Lokal ejer" };
     assert.deepEqual(library.listBooks(local).map((book) => book.id), ["book-a", "book-b"]);
 
+    const pendingUpload = await library.createBookUpload(local, "book-a", { filename: "draft.tar.gz" });
+    await library.writeBookUpload(local, "book-a", pendingUpload.upload.id, new Request("http://localhost/upload", {
+      method: "PUT",
+      headers: { "content-type": "application/gzip" },
+      body: "archive-placeholder",
+    }));
+    const restartedLibrary = new LibraryApplication({ config, catalog, collaborationRepository: collaboration });
+    const restoredUpload = await restartedLibrary.uploadRecord("book-a", pendingUpload.upload.id);
+    assert.equal(restoredUpload.uploaded, true);
+    assert.equal((await stat(restoredUpload.filePath)).mode & 0o777, 0o600);
+    assert.equal((await stat(restartedLibrary.pendingUploadDir)).mode & 0o777, 0o700);
+    await restartedLibrary.removeUpload(restoredUpload);
+
     const first = await library.createAnnotation(local, "book-a", pageDraft("Kun A"));
     const second = await library.createAnnotation(local, "book-b", pageDraft("Kun B"));
     assert.notEqual(first.revisionId, second.revisionId);
@@ -58,6 +71,25 @@ test("library application isolates book services, annotations and memberships", 
       expiresInHours: 24,
     });
     assert.equal((await collaboration.resolveServiceToken(adminToken.secret)).instanceAdmin, true);
+    const bookAdmin = await collaboration.createUser({
+      email: "book-admin@example.test",
+      displayName: "Bogadmin",
+      password: "meget-hemmeligt",
+      bookId: "book-a",
+      bookRole: "book_admin",
+    });
+    const bookAdminPrincipal = collaboration.principalForUser(bookAdmin.id, "book-a");
+    assert.throws(() => library.createUser(bookAdminPrincipal, {
+      email: "root@example.test",
+      displayName: "Root",
+      password: "andet-hemmeligt",
+      globalRole: "instance_admin",
+      bookId: "book-a",
+    }), /instansadministrator/i);
+    assert.throws(() => library.updateUser(bookAdminPrincipal, bookAdmin.id, { globalRole: "instance_admin", bookId: "book-a" }), /instansadministrator/i);
+    assert.equal(library.listTokens(bookAdminPrincipal, { bookId: "book-a" }).some((token) => token.id === adminToken.id), false);
+    assert.equal(library.revokeToken(bookAdminPrincipal, adminToken.id), false);
+    assert.equal(library.listTokens(local).some((token) => token.id === adminToken.id), true);
     assert.equal(library.revokeToken(local, multiBookToken.id), true);
     const tokenAuditActions = collaboration.listAudit({ bookId: "book-a" })
       .filter((event) => event.resourceType === "service_token")
@@ -85,6 +117,22 @@ test("library application isolates book services, annotations and memberships", 
       ...(await library.serviceForBook("book-b").annotations.list()).annotations,
     ].filter((annotation) => annotation.comment.startsWith("Læser")).map((annotation) => annotation.author.kind);
     assert.deepEqual(erasedAuthors, ["erased", "erased"]);
+
+    const archivedReaderToken = await library.createToken(local, {
+      name: "Arkivgrænse",
+      grants: [{ bookId: "book-b", permissions: ["books:read", "annotations:read", "annotations:read:all"] }],
+      expiresInHours: 24,
+    });
+    const archivedReaderPrincipal = await collaboration.resolveServiceToken(archivedReaderToken.secret);
+    library.archiveBook(local, "book-a");
+    assert.equal(library.defaultBookId, "book-b");
+    library.archiveBook(local, "book-b");
+    assert.equal(library.defaultBookId, "");
+    assert.throws(() => library.listAnnotations(archivedReaderPrincipal, "book-b"), /arkiveret/i);
+    assert.equal((await library.listAnnotations(local, "book-b")).bookId, "book-b");
+    assert.deepEqual(library.listBooks(local).map((book) => book.id), []);
+    assert.deepEqual(library.listBooks(local, { includeArchived: true }).map((book) => book.id), ["book-a", "book-b"]);
+    assert.equal(library.getBook(local, "book-b", { includeArchived: true }).status, "archived");
   } finally {
     collaboration.close();
     repository.close();

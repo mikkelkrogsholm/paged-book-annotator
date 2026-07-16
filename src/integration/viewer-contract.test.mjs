@@ -7,6 +7,7 @@ const exampleBook = new URL("../../example/book/book.html", import.meta.url);
 
 test("viewer shell exposes every control required by the annotation controller", async () => {
   const html = await readFile(new URL("index.html", publicRoot), "utf8");
+  const styles = await readFile(new URL("viewer.css", publicRoot), "utf8");
   const requiredIds = [
     "bookFrame",
     "annotationPanelButton",
@@ -26,20 +27,75 @@ test("viewer shell exposes every control required by the annotation controller",
     "readingTrackingToggle",
     "markCompleteButton",
     "passwordForm",
+    "surveyPanelButton",
+    "surveyPanel",
+    "surveyForm",
   ];
   for (const id of requiredIds) assert.match(html, new RegExp(`id="${id}"`));
+  for (const label of ["Indhold", "Kommentarer", "Feedback"]) {
+    assert.match(html, new RegExp(`aria-label="${label}"`));
+  }
+  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+});
+
+test("book content is isolated in a passive same-origin sandbox", async () => {
+  const viewer = await readFile(new URL("index.html", publicRoot), "utf8");
+  assert.match(viewer, /<iframe[^>]+id="bookFrame"[^>]+sandbox="allow-same-origin"/);
+  assert.doesNotMatch(viewer, /sandbox="[^"]*allow-scripts/);
 });
 
 test("admin share center exposes complete access, secret-copy and triage states", async () => {
   const html = await readFile(new URL("admin/index.html", publicRoot), "utf8");
   const controller = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
-  for (const id of ["accessForm", "accessProfile", "capabilityPreview", "readerUrl", "invitationSecret", "annotationFilters", "passwordForm"]) {
+  const styles = await readFile(new URL("admin/admin.css", publicRoot), "utf8");
+  for (const id of ["accessForm", "accessProfile", "capabilityPreview", "readerUrl", "invitationSecret", "annotationFilters", "passwordForm", "surveyBuilderForm", "surveyQuestionBuilder", "surveysTable", "surveyResponsesTable", "reviewExportLink"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(controller, /copy-invitation-link/);
   assert.match(controller, /save-annotation/);
   assert.match(controller, /state\.metadata\.accessProfiles/);
   assert.match(controller, /Ingen annotationer matcher filtrene/);
+  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+});
+
+test("async UI actions retain their form or button across awaits", async () => {
+  const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
+  const reader = await readFile(new URL("main.js", publicRoot), "utf8");
+  assert.doesNotMatch(admin, /setFormBusy\(event\.currentTarget/);
+  assert.doesNotMatch(admin, /await[^\n]*event\.currentTarget/);
+  assert.doesNotMatch(reader, /await[^\n]*event\.currentTarget/);
+  assert.match(admin, /const form = event\.currentTarget/);
+  assert.match(reader, /const button = event\.currentTarget/);
+});
+
+test("async UI completions stay bound to their originating book, survey and annotation draft", async () => {
+  const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
+  const surveys = await readFile(new URL("surveys/survey-controller.js", publicRoot), "utf8");
+  const annotations = await readFile(new URL("annotations/annotation-panel.js", publicRoot), "utf8");
+  const auth = await readFile(new URL("auth/auth-controller.js", publicRoot), "utf8");
+  const styles = await readFile(new URL("viewer.css", publicRoot), "utf8");
+  assert.match(admin, /const actionBookId = state\.bookId/);
+  assert.match(admin, /workspace\.inert = true/);
+  assert.match(admin, /bookPath\("members", actionBookId\)/);
+  assert.match(surveys, /const active = this\.active/);
+  assert.match(surveys, /const submitIntentId = this\.intentId/);
+  assert.match(surveys, /this\.intentId === submitIntentId/);
+  assert.match(annotations, /intentId: this\.composerIntentId/);
+  assert.match(annotations, /this\.composerIntentId === operation\.intentId/);
+  assert.match(annotations, /close\([\s\S]*?this\.composerIntentId \+= 1/);
+  assert.match(annotations, /if \(!this\.saving\) this\.composerIntentId \+= 1/);
+  assert.match(annotations, /this\.comment\.disabled = saving/);
+  assert.match(auth, /this\.show\(principal\?\.kind === "user" \? "password" : "login"\)/);
+  assert.match(styles, /auth-tabs button\[aria-selected="true"\]/);
+});
+
+test("reader surveys trigger after a stable anchor is left and keep skip state client-side", async () => {
+  const controller = await readFile(new URL("surveys/survey-controller.js", publicRoot), "utf8");
+  assert.match(controller, /targetWasLeft\(definition, previousAnchors, anchors\)/);
+  assert.match(controller, /publishedVersion/);
+  assert.match(controller, /sessionStorage/);
+  assert.match(controller, /\[1, 2, 3, 4, 5\]/);
+  assert.doesNotMatch(controller, /impression|dismissal/i);
 });
 
 test("reader progress separates position, engagement, completion and tracking consent", async () => {

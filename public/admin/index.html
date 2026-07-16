@@ -16,7 +16,7 @@
       <a href="#library">Bibliotek</a><a href="#overview">Overblik</a><a href="#revisions">Upload og revisioner</a>
       <a href="#sharing">Adgang</a><a href="#users">Brugere</a><a href="#invitations">Invitationer</a>
       <a href="#access-codes">Adgangskoder</a><a href="#annotations">Annotationer</a><a href="#progress">Læsning</a>
-      <a href="#tokens">MCP-tokens</a><a href="#audit">Audit</a>
+      <a href="#surveys">Surveys</a><a href="#tokens">MCP-tokens</a><a href="#audit">Audit</a>
     </nav>
     <a class="reader-link" id="readerLink" href="/">← Åbn aktiv bog</a>
   </aside>
@@ -27,10 +27,10 @@
       <section id="library">
         <div class="section-heading"><div><span>Administreret indhold</span><h2>Bibliotek</h2></div><p>Hver bog har egne revisioner, læsere, adgangsregler og agenttokens.</p></div>
         <form class="inline-form create-book-form" id="createBookForm">
-          <input name="title" placeholder="Titel" required maxlength="200">
-          <input name="slug" placeholder="URL-navn (valgfrit)" pattern="[a-z0-9]+(?:-[a-z0-9]+)*">
-          <input name="subtitle" placeholder="Undertitel">
-          <input name="language" value="da" placeholder="Sprog">
+          <input name="title" placeholder="Titel" aria-label="Titel" required maxlength="200">
+          <input name="slug" placeholder="URL-navn (valgfrit)" aria-label="URL-navn (valgfrit)" pattern="[a-z0-9]+(?:-[a-z0-9]+)*">
+          <input name="subtitle" placeholder="Undertitel" aria-label="Undertitel">
+          <input name="language" value="da" placeholder="Sprog" aria-label="Sprog">
           <button type="submit">Opret bog</button>
         </form>
         <div class="book-grid" id="bookGrid" aria-live="polite"></div>
@@ -40,7 +40,7 @@
         <section id="overview"><div class="section-heading"><div><span>Aktiv adgangsprofil</span><h2 id="accessPreset">—</h2></div><p id="accessSummary"></p></div><div class="metric-grid" id="metrics" aria-busy="true"><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div></div></section>
 
         <section id="revisions">
-          <div class="section-heading"><div><span>Immutable bogbundles</span><h2>Upload og revisioner</h2></div><p>Upload et <code>.tar.gz</code>-bundle. Det valideres i staging og påvirker først læserne, når du publicerer revisionen.</p></div>
+          <div class="section-heading"><div><span>Immutable bogbundles</span><h2>Upload og revisioner</h2></div><p>Upload et <code>.tar.gz</code>-bundle. Det valideres i staging og påvirker først læserne, når du publicerer revisionen. <a href="/docs/book-bundle" target="_blank">Læs bundlekontrakten</a>.</p></div>
           <form class="upload-panel" id="uploadForm">
             <label for="bundleFile">Bogbundle<input id="bundleFile" name="bundle" type="file" accept=".tar.gz,application/gzip,application/x-gzip" required></label>
             <button type="submit">Upload og validér</button>
@@ -64,24 +64,24 @@
 
         <section id="users"><div class="section-heading"><div><span>Identitet og per-bog grants</span><h2>Brugere</h2></div><p>Navn og e-mail identificerer feedback. Telefon er valgfri og kræver et angivet formål.</p></div>
           <form class="profile-form" id="createUserForm">
-            <input name="displayName" placeholder="Navn" required><input name="email" type="email" placeholder="E-mail" required>
-            <input name="phone" type="tel" placeholder="Telefon (valgfri)"><input name="phonePurpose" placeholder="Formål med telefonnummer">
-            <input name="password" type="password" minlength="10" placeholder="Midlertidigt password" required>
-            <select name="globalRole"><option value="user">Bruger</option><option value="instance_admin">Instansadministrator</option></select>
-            <select name="bookRole"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option><option value="publisher">Udgiver</option><option value="book_admin">Bogadministrator</option></select>
+            <input name="displayName" placeholder="Navn" aria-label="Navn" required><input name="email" type="email" placeholder="E-mail" aria-label="E-mail" required>
+            <input name="phone" type="tel" placeholder="Telefon (valgfri)" aria-label="Telefon (valgfri)"><input name="phonePurpose" placeholder="Formål med telefonnummer" aria-label="Formål med telefonnummer">
+            <input name="password" type="password" minlength="10" placeholder="Midlertidigt password" aria-label="Midlertidigt password" required>
+            <select name="globalRole" aria-label="Global rolle"><option value="user">Bruger</option><option value="instance_admin">Instansadministrator</option></select>
+            <select name="bookRole" aria-label="Bogrolle"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option><option value="publisher">Udgiver</option><option value="book_admin">Bogadministrator</option></select>
             <button type="submit">Opret og giv adgang</button>
           </form>
           <div class="table-wrap"><table><thead><tr><th>Bruger</th><th>Global rolle</th><th>Bogrolle</th><th>Status</th><th></th></tr></thead><tbody id="usersTable"></tbody></table></div>
         </section>
 
         <section id="invitations"><div class="section-heading"><div><span>Personlige reviewlinks</span><h2>Invitationer</h2></div><p>Invitationshemmeligheden vises kun én gang og er kun gyldig til den valgte bog.</p></div>
-          <form class="inline-form invite-form" id="inviteForm"><input name="displayName" placeholder="Navn"><input name="email" type="email" placeholder="E-mail" required><select name="role"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option><option value="book_admin">Bogadministrator</option></select><input name="expiresInHours" type="number" min="1" max="8760" value="168" aria-label="Gyldig i timer"><button type="submit">Opret invitation</button></form>
+          <form class="inline-form invite-form" id="inviteForm"><input name="displayName" placeholder="Navn" aria-label="Navn"><input name="email" type="email" placeholder="E-mail" aria-label="E-mail" required><select name="role" aria-label="Bogrolle"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option><option value="book_admin">Bogadministrator</option></select><input name="expiresInHours" type="number" min="1" max="8760" value="168" aria-label="Gyldig i timer"><button type="submit">Opret invitation</button></form>
           <div class="secret-output" id="invitationOutput" hidden><span>Vises kun nu</span><code id="invitationSecret"></code><button class="secondary" type="button" data-action="copy-invitation-link">Kopiér link</button></div>
           <div class="table-wrap"><table><thead><tr><th>E-mail</th><th>Rolle</th><th>Udløber</th><th>Status</th><th></th></tr></thead><tbody id="invitationsTable"></tbody></table></div>
         </section>
 
         <section id="access-codes"><div class="section-heading"><div><span>Kontrolleret åben tilmelding</span><h2>Adgangskoder</h2></div><p>Koder kan udløbe, begrænses i antal anvendelser og tilbagekaldes straks.</p></div>
-          <form class="inline-form code-form" id="accessCodeForm"><input name="name" placeholder="Internt navn" required><select name="role"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option></select><input name="maxUses" type="number" min="1" max="10000" value="10" aria-label="Maksimalt antal anvendelser"><input name="expiresInHours" type="number" min="1" max="8760" value="168" aria-label="Gyldig i timer"><button type="submit">Opret kode</button></form>
+          <form class="inline-form code-form" id="accessCodeForm"><input name="name" placeholder="Internt navn" aria-label="Internt navn" required><select name="role" aria-label="Bogrolle"><option value="reader">Læser</option><option value="reviewer" selected>Prøvelæser</option><option value="editor">Redaktør</option></select><input name="maxUses" type="number" min="1" max="10000" value="10" aria-label="Maksimalt antal anvendelser"><input name="expiresInHours" type="number" min="1" max="8760" value="168" aria-label="Gyldig i timer"><button type="submit">Opret kode</button></form>
           <output class="secret-output" id="accessCodeOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Rolle</th><th>Anvendelser</th><th>Udløber</th><th></th></tr></thead><tbody id="accessCodesTable"></tbody></table></div>
         </section>
 
@@ -94,8 +94,31 @@
 
         <section id="progress"><div class="section-heading"><div><span>Stabile ankre og sidehints</span><h2>Læseprogression</h2></div><p>Kun den seneste position og samtykkebaserede læsehændelser vises.</p></div><div class="table-wrap"><table><thead><tr><th>Læser</th><th>Position</th><th>Fremdrift</th><th>Læste steder</th><th>Senest</th></tr></thead><tbody id="progressTable"></tbody></table></div></section>
 
+        <section id="surveys">
+          <div class="section-heading"><div><span>Struktureret prøvelæserfeedback</span><h2>Surveys</h2></div><div class="export-links" id="reviewExportControls"><a id="reviewExportLink" href="#">Review-eksport</a><label><input id="includeProgressExport" type="checkbox"> Med læseprogression</label></div></div>
+          <p class="section-intro">En publiceret version er immutable og bundet til den aktive bogrevision og et stabilt anker. En senere redigering opretter en ny kladde.</p>
+          <form class="survey-builder" id="surveyBuilderForm">
+            <input name="title" placeholder="Surveytitel" aria-label="Surveytitel" maxlength="160" required>
+            <textarea name="description" rows="2" maxlength="2000" placeholder="Kort introduktion (valgfri)" aria-label="Kort introduktion (valgfri)"></textarea>
+            <div class="survey-target-grid">
+              <select name="targetKind" aria-label="Måltype"><option value="section">Afsnit</option><option value="page">Side</option></select>
+              <input name="anchorId" list="anchorOptions" placeholder="Stabilt data-book-anchor" aria-label="Stabilt boganker" required>
+              <datalist id="anchorOptions"></datalist>
+              <input name="pageNumberHint" type="number" min="1" placeholder="Sidehint" aria-label="Sidehint">
+              <input name="targetLabel" placeholder="Visningsnavn" aria-label="Visningsnavn">
+              <select name="triggerMode" aria-label="Visningstidspunkt"><option value="afterLeave">Når målet forlades</option><option value="manual">Kun via Feedback-knappen</option></select>
+            </div>
+            <div class="survey-questions" id="surveyQuestionBuilder"></div>
+            <div class="builder-actions"><button class="secondary" id="addSurveyQuestion" type="button">Tilføj spørgsmål</button><button class="secondary" id="cancelSurveyEdit" type="button" hidden>Annullér redigering</button><button type="submit" id="saveSurveyDraft">Opret kladde</button></div>
+          </form>
+          <div class="table-wrap"><table><thead><tr><th>Survey</th><th>Mål</th><th>Status</th><th>Svar</th><th></th></tr></thead><tbody id="surveysTable"></tbody></table></div>
+          <div class="section-heading survey-response-heading" id="surveyResponsesHeading"><div><span>Versionerede svar</span><h2>Surveybesvarelser</h2></div><p>Fritekst vises kun her og i autoriseret eksport; den skrives aldrig til logs.</p></div>
+          <div class="table-wrap"><table><thead><tr><th>Læser</th><th>Survey</th><th>Svar</th><th>Revision</th><th>Opdateret</th></tr></thead><tbody id="surveyResponsesTable"></tbody></table></div>
+        </section>
+
         <section id="tokens"><div class="section-heading"><div><span>Agent- og MCP-adgang</span><h2>Service-tokens</h2></div><p>Tokenet begrænses til den valgte bog. Instansgrants kræver særskilt administratorpermission.</p></div>
-          <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" required><label><input name="instanceAdmin" type="checkbox" value="true"> Instansadministrator</label><button type="submit">Opret token</button></div><fieldset><legend>Bøger (samme permissions anvendes på de valgte bøger)</legend><div class="scope-grid" id="tokenBookGrid"></div></fieldset><fieldset><legend>Permissions</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
+          <div class="token-presets" role="group" aria-label="Tokenpresets"><button class="secondary" type="button" data-token-preset="reader-agent">Læseagent</button><button class="secondary" type="button" data-token-preset="review-agent">Reviewagent</button><button class="secondary" type="button" data-token-preset="survey-admin">Surveyadministrator</button></div>
+          <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" aria-label="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" aria-label="Gyldig i timer" required><label><input name="instanceAdmin" type="checkbox" value="true"> Instansadministrator</label><button type="submit">Opret token</button></div><fieldset><legend>Bøger (samme permissions anvendes på de valgte bøger)</legend><div class="scope-grid" id="tokenBookGrid"></div></fieldset><fieldset><legend>Permissions — se <a href="/docs/mcp" target="_blank">agentguiden</a> for betydning og workflows</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
           <output class="secret-output" id="tokenOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Prefix</th><th>Bøger og rettigheder</th><th>Udløber</th><th></th></tr></thead><tbody id="tokensTable"></tbody></table></div>
         </section>
 

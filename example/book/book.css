@@ -1,0 +1,13 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #d8d2c6; }
+body { font-family: Georgia, serif; }
+.pagedjs_pages { display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 24px; }
+.pagedjs_page { position: relative; width: 420px; height: 595px; overflow: hidden; background: #f4eee2; color: #1d1d19; }
+.page-content { height: 100%; padding: 62px 58px; }
+.page-content h1, .page-content h2 { margin: 0; font-weight: 400; }
+.page-content h1 { margin-top: 110px; font-size: 46px; }
+.page-content h2 { margin-top: 65px; font-size: 31px; }
+.page-content p { margin: 24px 0 0; font-size: 18px; line-height: 1.55; }
+.page-number { position: absolute; bottom: 28px; color: #8a3d34; font: 12px system-ui, sans-serif; }
+.left .page-number { left: 34px; }
+.right .page-number { right: 34px; }

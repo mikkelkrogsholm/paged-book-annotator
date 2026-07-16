@@ -22,8 +22,8 @@ async function api(path, options = {}) {
   return payload;
 }
 
-async function optionalApi(path, fallback) {
-  try { return await api(path); } catch (error) {
+async function optionalApi(path, fallback, options = {}) {
+  try { return await api(path, options); } catch (error) {
     if (/\(404\)|ikke fundet|not found/i.test(error.message)) return fallback;
     throw error;
   }
@@ -39,7 +39,7 @@ function option(value, current, label = value) {
 
 function emptyRow(columns, message) { return `<tr><td colspan="${columns}" class="empty-cell">${escapeHtml(message)}</td></tr>`; }
 function list(payload, key) { return Array.isArray(payload) ? payload : Array.isArray(payload?.[key]) ? payload[key] : Array.isArray(payload?.items) ? payload.items : []; }
-function bookPath(segment = "") { return `/api/admin/books/${encodeURIComponent(state.bookId)}${segment ? `/${segment}` : ""}`; }
+function bookPath(segment = "", bookId = state.bookId) { return `/api/admin/books/${encodeURIComponent(bookId)}${segment ? `/${segment}` : ""}`; }
 function readerPath(book = state.book) { return `/books/${encodeURIComponent(book?.slug ?? book?.id ?? state.bookId)}`; }
 
 function toast(message) {
@@ -48,6 +48,13 @@ function toast(message) {
   node.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { node.hidden = true; }, 4200);
+}
+
+function setFormBusy(form, busy) {
+  form.toggleAttribute("aria-busy", busy);
+  for (const button of form.querySelectorAll("button[type=submit], button:not([type])")) button.disabled = busy;
+  if (busy) state.busyForms.add(form); else state.busyForms.delete(form);
+  updateBookNavigationBusy();
 }
 
 async function copyText(value) {
@@ -64,24 +71,108 @@ const presetLabels = {
   privateRead: "Privat · kun læsning", privateReview: "Privat · review med feedback",
 };
 const fallbackProfiles = {
-  local: { reading: "local", annotationCreate: "local", annotationView: "own", registration: "closed", progressTracking: "optional", localBypass: true },
-  publicRead: { reading: "public", annotationCreate: "none", annotationView: "none", registration: "closed", progressTracking: "optional" },
-  publicOpenReview: { reading: "public", annotationCreate: "public", annotationView: "public", registration: "open", progressTracking: "optional" },
-  publicMemberReview: { reading: "public", annotationCreate: "member", annotationView: "own", registration: "open", progressTracking: "optional" },
-  publicInviteReview: { reading: "public", annotationCreate: "member", annotationView: "reviewGroup", registration: "invite", progressTracking: "optional" },
-  privateRead: { reading: "member", annotationCreate: "none", annotationView: "none", registration: "invite", progressTracking: "optional" },
-  privateReview: { reading: "member", annotationCreate: "member", annotationView: "reviewGroup", registration: "invite", progressTracking: "optional" },
+  local: { reading: "public", annotationCreate: "public", annotationView: "public", surveyResponse: "public", registration: "disabled", progressTracking: "resume", localBypass: true },
+  publicRead: { reading: "public", annotationCreate: "disabled", annotationView: "none", surveyResponse: "disabled", registration: "disabled", progressTracking: "off", localBypass: false },
+  publicOpenReview: { reading: "public", annotationCreate: "public", annotationView: "public", surveyResponse: "public", registration: "disabled", progressTracking: "resume", localBypass: false },
+  publicMemberReview: { reading: "public", annotationCreate: "authenticated", annotationView: "own", surveyResponse: "authenticated", registration: "open", progressTracking: "resume", localBypass: false },
+  publicInviteReview: { reading: "public", annotationCreate: "invited", annotationView: "own", surveyResponse: "invited", registration: "inviteOnly", progressTracking: "resume", localBypass: false },
+  privateRead: { reading: "invited", annotationCreate: "disabled", annotationView: "none", surveyResponse: "disabled", registration: "inviteOnly", progressTracking: "resume", localBypass: false },
+  privateReview: { reading: "invited", annotationCreate: "invited", annotationView: "own", surveyResponse: "invited", registration: "inviteOnly", progressTracking: "resume", localBypass: false },
 };
-const capabilityLabels = { reading: "Læsning", annotationCreate: "Opret feedback", annotationView: "Se feedback", registration: "Konto", progressTracking: "Læsestatus" };
-const fallbackPermissions = ["book:read", "annotations:read", "annotations:write", "annotations:moderate", "annotations:export", "progress:read:self", "progress:read:all", "members:manage", "invitations:manage"];
-const state = { books: [], book: null, bookId: null, metadata: null, annotations: [], invitationUrl: "", accessCode: "" };
+const capabilityLabels = { reading: "Læsning", annotationCreate: "Opret annotation", annotationView: "Se annotationer", surveyResponse: "Besvar surveys", registration: "Konto", progressTracking: "Læsestatus" };
+const fallbackPermissions = [
+  "books:read", "books:upload", "books:publish", "books:settings", "annotations:read", "annotations:read:self",
+  "annotations:read:all", "annotations:write", "annotations:moderate", "annotations:export", "surveys:respond",
+  "surveys:manage", "surveys:responses:read", "surveys:export", "progress:read:self", "progress:read:all",
+  "users:read", "users:invite", "access:manage", "tokens:manage", "audit:read", "settings:manage",
+];
+const statusLabels = { draft: "Kladde", published: "Publiceret", archived: "Arkiveret", staged: "Modtaget", validating: "Validerer", ready: "Klar", failed: "Fejlet", active: "Aktiv", closed: "Lukket", superseded: "Afløst" };
+const state = {
+  books: [], book: null, bookId: null, metadata: null, annotations: [], surveys: [], surveyResponses: [], outline: [],
+  editingSurveyId: null, invitationUrl: "", accessCode: "", session: null, permissions: new Set(),
+  bookLoadController: null, loadGeneration: 0,
+  loadingBook: false, busyForms: new Set(), busyActions: 0,
+};
+
+function updateBookNavigationBusy() {
+  const busy = state.loadingBook || state.busyForms.size > 0 || state.busyActions > 0;
+  document.querySelector("#bookSelector").disabled = busy;
+  document.querySelector("#bookGrid").inert = busy;
+}
+
+function isInstanceAdmin() {
+  const principal = state.session?.principal;
+  return principal?.kind === "local" || principal?.globalRole === "instance_admin" || principal?.instanceAdmin === true;
+}
+
+function can(permission) {
+  return isInstanceAdmin() || state.permissions.has(permission);
+}
+
+function permissionsFromSession(session) {
+  const permissions = session?.capabilities?.permissions;
+  if (Array.isArray(permissions)) return new Set(permissions);
+  return session?.capabilities?.canManageUsers ? new Set(state.metadata?.permissions ?? fallbackPermissions) : new Set();
+}
+
+function setSectionVisible(id, visible) {
+  document.querySelector(`#${id}`).hidden = !visible;
+  document.querySelector(`.sidebar nav a[href="#${id}"]`)?.toggleAttribute("hidden", !visible);
+}
+
+function applyPermissionVisibility() {
+  setSectionVisible("overview", can("users:read") && can("annotations:read:all"));
+  setSectionVisible("revisions", can("books:upload") || can("books:publish"));
+  setSectionVisible("sharing", can("access:manage"));
+  setSectionVisible("users", can("users:read"));
+  setSectionVisible("invitations", can("users:read") || can("users:invite"));
+  setSectionVisible("access-codes", can("users:read") || can("users:invite"));
+  setSectionVisible("annotations", can("annotations:read:all") || can("annotations:moderate") || can("annotations:export"));
+  setSectionVisible("progress", can("progress:read:all"));
+  setSectionVisible("surveys", can("surveys:manage") || can("surveys:responses:read") || can("surveys:export"));
+  setSectionVisible("tokens", can("tokens:manage"));
+  setSectionVisible("audit", can("audit:read"));
+  document.querySelector("#createBookForm").hidden = !isInstanceAdmin();
+  document.querySelector("#createUserForm").hidden = !isInstanceAdmin();
+  document.querySelector("#uploadForm").hidden = !can("books:upload");
+  document.querySelector("#inviteForm").hidden = !can("users:invite");
+  document.querySelector("#invitationsTable").closest(".table-wrap").hidden = !can("users:read");
+  document.querySelector("#accessCodeForm").hidden = !can("users:invite");
+  document.querySelector("#accessCodesTable").closest(".table-wrap").hidden = !can("users:read");
+  document.querySelector("#annotationFilters").hidden = !can("annotations:read:all");
+  document.querySelector("#annotationsTable").closest(".table-wrap").hidden = !can("annotations:read:all");
+  document.querySelector("#surveyBuilderForm").hidden = !can("surveys:manage");
+  document.querySelector("#surveysTable").closest(".table-wrap").hidden = !can("surveys:manage");
+  document.querySelector("#surveyResponsesHeading").hidden = !can("surveys:responses:read");
+  document.querySelector("#surveyResponsesTable").closest(".table-wrap").hidden = !can("surveys:responses:read");
+  document.querySelector("#reviewExportControls").hidden = !(
+    can("surveys:export") && can("annotations:export") && can("annotations:read:all")
+  );
+  document.querySelectorAll("[data-export-format]").forEach((link) => {
+    link.hidden = !can("annotations:export");
+  });
+  const instanceAdminToggle = document.querySelector("[name=instanceAdmin]");
+  instanceAdminToggle.closest("label").hidden = !isInstanceAdmin();
+  instanceAdminToggle.disabled = !isInstanceAdmin();
+}
+
+function ignoreAbort(error) {
+  if (error?.name !== "AbortError") toast(error.message);
+}
 
 function renderBooks() {
-  document.querySelector("#bookSelector").innerHTML = state.books.map((book) => option(book.id, state.bookId, `${book.title ?? book.id} · ${book.status ?? "draft"}`)).join("");
+  document.querySelector("#bookSelector").innerHTML = state.books.map((book) => option(book.id, state.bookId, `${book.title ?? book.id} · ${statusLabels[book.status] ?? book.status ?? "Kladde"}`)).join("");
   document.querySelector("#bookGrid").innerHTML = state.books.map((book) => {
     const active = book.id === state.bookId ? " active" : "";
     const revision = book.activeRevisionId ? `Aktiv revision ${book.activeRevisionId}` : "Intet publiceret bundle";
-    return `<article class="book-card${active}" data-book-id="${escapeHtml(book.id)}"><span>${escapeHtml(book.status ?? "draft")}</span><h3>${escapeHtml(book.title ?? book.id)}</h3><p>${escapeHtml(book.subtitle ?? revision)}</p><small>${escapeHtml(revision)}</small><div class="row-actions"><button class="secondary" data-action="select-book">Administrér</button>${book.status === "archived" ? "" : '<button class="quiet-danger" data-action="archive-book">Arkivér</button>'}</div></article>`;
+    const archive = book.status !== "archived" && book.id === state.bookId && can("books:settings") ? '<button class="quiet-danger" data-action="archive-book">Arkivér</button>' : "";
+    return `<article class="book-card${active}" data-book-id="${escapeHtml(book.id)}">
+      <span>${escapeHtml(statusLabels[book.status] ?? book.status ?? "Kladde")}</span>
+      <h3>${escapeHtml(book.title ?? book.id)}</h3><p>${escapeHtml(book.subtitle ?? revision)}</p>
+      <small>${escapeHtml(revision)}</small><div class="row-actions">
+        <button class="secondary" data-action="select-book">Administrér</button>${archive}
+      </div>
+    </article>`;
   }).join("") || '<p class="empty-library">Biblioteket er tomt. Opret den første bog ovenfor.</p>';
   document.querySelector("#tokenBookGrid").innerHTML = state.books.filter((book) => book.status !== "archived").map((book) => `<label><input type="checkbox" name="tokenBook" value="${escapeHtml(book.id)}"${book.id === state.bookId ? " checked" : ""}>${escapeHtml(book.title ?? book.id)}</label>`).join("");
 }
@@ -89,7 +180,7 @@ function renderBooks() {
 function renderAccess(policy) {
   const resolved = { ...(state.metadata?.accessProfiles?.[policy?.preset] ?? fallbackProfiles[policy?.preset] ?? {}), ...policy };
   document.querySelector("#accessPreset").textContent = presetLabels[resolved.preset] ?? resolved.preset ?? "Ikke konfigureret";
-  document.querySelector("#accessSummary").textContent = `Læsning: ${resolved.reading ?? "—"} · annotation: ${resolved.annotationCreate ?? "—"} · tilmelding: ${resolved.enrollment ?? resolved.registration ?? "—"}`;
+  document.querySelector("#accessSummary").textContent = `Læsning: ${resolved.reading ?? "—"} · annotation: ${resolved.annotationCreate ?? "—"} · survey: ${resolved.surveyResponse ?? "—"} · tilmelding: ${resolved.enrollment ?? resolved.registration ?? "—"}`;
   document.querySelector("#accessProfile").value = resolved.preset ?? "privateReview";
   document.querySelector("#enrollmentMode").value = resolved.registration ?? "closed";
   document.querySelector("#capabilityPreview").innerHTML = Object.entries(capabilityLabels).map(([field, label]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(resolved[field] ?? "—")}</dd></div>`).join("");
@@ -98,11 +189,13 @@ function renderAccess(policy) {
 
 function renderRevisions(revisions) {
   document.querySelector("#revisionsTable").innerHTML = revisions.map((revision) => {
-    const status = revision.status ?? revision.validation?.status ?? "staged";
-    const details = revision.validation?.errors?.length ? `${revision.validation.errors.length} fejl` : revision.validation?.warnings?.length ? `${revision.validation.warnings.length} advarsler` : status;
+    const status = revision.state ?? revision.status ?? revision.validation?.status ?? "staged";
+    const details = revision.validation?.errors?.length ? `${revision.validation.errors.length} fejl` : revision.validation?.warnings?.length ? `${revision.validation.warnings.length} advarsler` : statusLabels[status] ?? status;
     const active = revision.id === state.book?.activeRevisionId;
-    const action = status === "ready" && !active ? `<button class="secondary" data-action="publish-revision" data-id="${escapeHtml(revision.id)}">Publicér</button>` : active ? "Aktiv" : "";
-    return `<tr><td><strong>${escapeHtml(revision.id)}</strong><small>${active ? "Aktiv" : escapeHtml(status)}</small></td><td>${escapeHtml(revision.filename ?? revision.bundleHash ?? "—")}</td><td>${escapeHtml(details)}</td><td>${formatDate(revision.createdAt)}</td><td>${action}</td></tr>`;
+    const action = status === "ready" && !active && can("books:publish")
+      ? `<button class="secondary" data-action="publish-revision" data-id="${escapeHtml(revision.id)}">Publicér</button>`
+      : active ? "Aktiv" : "";
+    return `<tr><td><strong>${escapeHtml(revision.id)}</strong><small>${active ? "Aktiv" : escapeHtml(statusLabels[status] ?? status)}</small></td><td>${escapeHtml(revision.filename ?? revision.bundleHash ?? "—")}</td><td>${escapeHtml(details)}</td><td>${formatDate(revision.createdAt)}</td><td>${action}</td></tr>`;
   }).join("") || emptyRow(5, "Der er endnu ingen revisioner.");
 }
 
@@ -111,7 +204,27 @@ function renderUsers(users) {
     const user = entry.user ?? entry;
     const membership = entry.membership ?? user.membership ?? entry;
     const role = membership.bookRole ?? membership.role ?? "";
-    return `<tr data-user-id="${escapeHtml(user.id)}"><td><strong>${escapeHtml(user.displayName)}</strong><small>${escapeHtml(user.email)}</small>${user.phone ? `<small>Telefon registreret · ${escapeHtml(user.phonePurpose ?? "formål ikke vist")}</small>` : ""}</td><td><select data-field="globalRole">${option("user", user.globalRole, "Bruger")}${option("instance_admin", user.globalRole, "Administrator")}</select></td><td><select data-field="bookRole">${option("", role, "Ingen")}${option("reader", role, "Læser")}${option("reviewer", role, "Prøvelæser")}${option("editor", role, "Redaktør")}${option("publisher", role, "Udgiver")}${option("book_admin", role, "Bogadministrator")}</select></td><td><select data-field="status">${option("active", user.status, "Aktiv")}${option("disabled", user.status, "Deaktiveret")}</select></td><td><div class="row-actions"><button class="secondary" data-action="save-user">Gem</button><button class="secondary" data-action="show-password-reset">Nyt password</button></div><div class="password-reset" hidden><input data-field="newPassword" type="password" minlength="10" placeholder="Mindst 10 tegn"><button data-action="reset-password">Nulstil</button></div></td></tr>`;
+    const globalRole = isInstanceAdmin()
+      ? `<select data-field="globalRole" aria-label="Global rolle for ${escapeHtml(user.displayName)}">${option("user", user.globalRole, "Bruger")}${option("instance_admin", user.globalRole, "Administrator")}</select>`
+      : escapeHtml(user.globalRole === "instance_admin" ? "Administrator" : "Bruger");
+    const status = isInstanceAdmin()
+      ? `<select data-field="status" aria-label="Kontostatus for ${escapeHtml(user.displayName)}">${option("active", user.status, "Aktiv")}${option("disabled", user.status, "Deaktiveret")}</select>`
+      : escapeHtml(user.status === "disabled" ? "Deaktiveret" : "Aktiv");
+    const reset = isInstanceAdmin() ? '<button class="secondary" data-action="show-password-reset">Nyt password</button>' : "";
+    const resetForm = isInstanceAdmin() ? '<div class="password-reset" hidden><input data-field="newPassword" type="password" minlength="10" placeholder="Mindst 10 tegn" aria-label="Nyt password"><button data-action="reset-password">Nulstil</button></div>' : "";
+    return `<tr data-user-id="${escapeHtml(user.id)}" data-original-global-role="${escapeHtml(user.globalRole)}"
+      data-original-status="${escapeHtml(user.status)}" data-original-book-role="${escapeHtml(role)}">
+      <td><strong>${escapeHtml(user.displayName)}</strong><small>${escapeHtml(user.email)}</small>
+        ${user.phone ? `<small>Telefon registreret · ${escapeHtml(user.phonePurpose ?? "formål ikke vist")}</small>` : ""}
+      </td><td>${globalRole}</td><td>
+        <select data-field="bookRole" aria-label="Bogrolle for ${escapeHtml(user.displayName)}">
+          ${option("", role, "Ingen")}${option("reader", role, "Læser")}${option("reviewer", role, "Prøvelæser")}
+          ${option("editor", role, "Redaktør")}${option("publisher", role, "Udgiver")}${option("book_admin", role, "Bogadministrator")}
+        </select>
+      </td><td>${status}</td><td><div class="row-actions">
+        <button class="secondary" data-action="save-user">Gem</button>${reset}
+      </div>${resetForm}</td>
+    </tr>`;
   }).join("") || emptyRow(5, "Ingen brugere har adgang til denne bog.");
 }
 
@@ -124,7 +237,11 @@ function renderInvitations(invitations) {
 }
 
 function renderAccessCodes(codes) {
-  document.querySelector("#accessCodesTable").innerHTML = codes.map((code) => `<tr><td>${escapeHtml(code.name)}</td><td>${escapeHtml(code.role)}</td><td>${code.useCount ?? 0} / ${code.maxUses ?? "∞"}</td><td>${formatDate(code.expiresAt)}</td><td>${code.revokedAt ? "Tilbagekaldt" : `<button class="secondary" data-action="revoke-code" data-id="${escapeHtml(code.id)}">Tilbagekald</button>`}</td></tr>`).join("") || emptyRow(5, "Der er ingen adgangskoder til denne bog.");
+  document.querySelector("#accessCodesTable").innerHTML = codes.map((code) => `<tr>
+    <td>${escapeHtml(code.name)}</td><td>${escapeHtml(code.role)}</td>
+    <td>${code.useCount ?? 0} / ${code.maxUses ?? "∞"}</td><td>${formatDate(code.expiresAt)}</td>
+    <td>${code.revokedAt ? "Tilbagekaldt" : `<button class="secondary" data-action="revoke-code" data-id="${escapeHtml(code.id)}">Tilbagekald</button>`}</td>
+  </tr>`).join("") || emptyRow(5, "Der er ingen adgangskoder til denne bog.");
 }
 
 function renderTokens(tokens) {
@@ -146,7 +263,17 @@ function renderAnnotations(annotations) {
     const orphaned = note.anchorState === "orphaned" ? " · uforankret" : "";
     const statusOptions = option("open", note.status, "Åben") + option("accepted", note.status, "Accepteret") + option("rejected", note.status, "Afvist") + option("resolved", note.status, "Løst");
     const categoryOptions = option("general", note.category, "Generel") + option("language", note.category, "Sprog") + option("structure", note.category, "Struktur") + option("fact", note.category, "Fakta") + option("design", note.category, "Design");
-    return `<tr data-annotation-id="${escapeHtml(note.id)}"><td>${escapeHtml(note.author?.displayName ?? "Ukendt")}</td><td><a href="${readerPath()}?annotation=${encodeURIComponent(note.id)}">${target}</a><small>Side ${note.target?.pageNumber ?? "—"} · ${escapeHtml(note.type)}${orphaned}</small></td><td>${escapeHtml(note.comment)}</td><td><select data-field="annotationStatus">${statusOptions}</select><select data-field="annotationCategory">${categoryOptions}</select><button class="secondary" data-action="save-annotation">Gem</button></td><td>${formatDate(note.updatedAt)}</td></tr>`;
+    const triage = can("annotations:moderate")
+      ? `<select data-field="annotationStatus" aria-label="Status">${statusOptions}</select>
+        <select data-field="annotationCategory" aria-label="Kategori">${categoryOptions}</select>
+        <button class="secondary" data-action="save-annotation">Gem</button>`
+      : `${escapeHtml(statusLabels[note.status] ?? note.status)}<small>${escapeHtml(note.category ?? "general")}</small>`;
+    return `<tr data-annotation-id="${escapeHtml(note.id)}">
+      <td>${escapeHtml(note.author?.displayName ?? "Ukendt")}</td>
+      <td><a href="${readerPath()}?annotation=${encodeURIComponent(note.id)}">${target}</a>
+        <small>Side ${note.target?.pageNumber ?? "—"} · ${escapeHtml(note.type)}${orphaned}</small>
+      </td><td>${escapeHtml(note.comment)}</td><td>${triage}</td><td>${formatDate(note.updatedAt)}</td>
+    </tr>`;
   }).join("") || emptyRow(5, annotations.length ? "Ingen annotationer matcher filtrene." : "Der er endnu ingen annotationer.");
 }
 
@@ -154,12 +281,141 @@ function renderProgress(progress) {
   document.querySelector("#progressTable").innerHTML = progress.map((item) => {
     const pages = item.readPages ?? [];
     const readAnchors = pages.map((page) => escapeHtml(page.anchorId)).join(", ");
-    return `<tr><td>${escapeHtml(item.displayName)}<small>${escapeHtml(item.email)}</small></td><td>${escapeHtml(item.anchorId)}<small>Side ${item.pageNumber ?? "—"}</small></td><td>${item.engagedPercent ?? 0}% engageret<small>Seneste position ${item.percent ?? 0}%${item.completedAt ? " · færdig" : ""}</small></td><td>${pages.length}<small>${readAnchors}</small></td><td>${formatDate(item.updatedAt)}</td></tr>`;
+    return `<tr>
+      <td>${escapeHtml(item.displayName)}<small>${escapeHtml(item.email)}</small></td>
+      <td>${escapeHtml(item.anchorId)}<small>Side ${item.pageNumber ?? "—"}</small></td>
+      <td>${item.engagedPercent ?? 0}% engageret
+        <small>Seneste position ${item.percent ?? 0}%${item.completedAt ? " · færdig" : ""}</small>
+      </td><td>${pages.length}<small>${readAnchors}</small></td><td>${formatDate(item.updatedAt)}</td>
+    </tr>`;
   }).join("") || emptyRow(5, "Ingen læsere har delt læsestatus.");
+}
+
+function surveyDefinition(survey) { return survey.draft?.definition ?? survey.published?.definition ?? null; }
+
+function questionEditor(question = {}, index = 0) {
+  const type = question.type ?? "rating";
+  const options = (question.options ?? [{ id: "structure", label: "Struktur" }, { id: "language", label: "Sprog" }, { id: "nothing", label: "Intet" }]).map((item) => `${item.id}: ${item.label}`).join("\n");
+  return `<fieldset class="survey-question-editor" data-question-index="${index}">
+    <legend>Spørgsmål ${index + 1}</legend>
+    <input data-question="id" value="${escapeHtml(question.id ?? `question-${index + 1}`)}" placeholder="Stabilt id" aria-label="Stabilt spørgsmåls-id" required pattern="[A-Za-z0-9][A-Za-z0-9._:-]*">
+    <select data-question="type" aria-label="Spørgsmålstype">${option("rating", type, "1–5 rating")}${option("singleChoice", type, "Ét valg")}${option("shortText", type, "Kort tekst")}${option("longText", type, "Lang tekst")}</select>
+    <input class="question-prompt" data-question="prompt" value="${escapeHtml(question.prompt ?? "")}" placeholder="Ét præcist spørgsmål" aria-label="Spørgsmål" required>
+    <input data-question="helpText" value="${escapeHtml(question.helpText ?? "")}" placeholder="Hjælpetekst (valgfri)" aria-label="Hjælpetekst (valgfri)">
+    <label class="question-required"><input data-question="required" type="checkbox"${question.required === false ? "" : " checked"}> Krævet</label>
+    <div class="question-rating-fields"${type === "rating" ? "" : " hidden"}><input data-question="minLabel" value="${escapeHtml(question.scale?.minLabel ?? "Svært")}" placeholder="Label ved 1" aria-label="Label ved laveste rating"><input data-question="maxLabel" value="${escapeHtml(question.scale?.maxLabel ?? "Let")}" placeholder="Label ved 5" aria-label="Label ved højeste rating"></div>
+    <textarea class="question-choice-fields" data-question="options" rows="3" placeholder="id: Svarmulighed — én per linje" aria-label="Svarmuligheder, én per linje"${type === "singleChoice" ? "" : " hidden"}>${escapeHtml(options)}</textarea>
+    <input class="question-text-fields" data-question="maxLength" type="number" min="1" max="4000" value="${question.maxLength ?? (type === "shortText" ? 300 : 2000)}" aria-label="Maksimal tekstlængde"${type === "shortText" || type === "longText" ? "" : " hidden"}>
+    <button class="secondary" type="button" data-action="remove-survey-question">Fjern</button>
+  </fieldset>`;
+}
+
+function renderQuestionBuilder(questions = []) {
+  const normalized = questions.length ? questions : [{ id: "clarity", type: "rating", prompt: "Hvor let var dette afsnit at forstå?", required: true, scale: { min: 1, max: 5, minLabel: "Meget svært", maxLabel: "Meget let" } }];
+  document.querySelector("#surveyQuestionBuilder").innerHTML = normalized.map(questionEditor).join("");
+}
+
+function readSurveyDefinition(form) {
+  const input = formObject(form);
+  const questions = [...document.querySelectorAll(".survey-question-editor")].map((row) => {
+    const get = (field) => row.querySelector(`[data-question=${field}]`);
+    const type = get("type").value;
+    const question = { id: get("id").value, type, prompt: get("prompt").value, helpText: get("helpText").value, required: get("required").checked };
+    if (type === "rating") question.scale = { min: 1, max: 5, minLabel: get("minLabel").value, maxLabel: get("maxLabel").value };
+    if (type === "singleChoice") question.options = get("options").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => { const [id, ...label] = line.split(":"); return { id: id.trim(), label: label.join(":").trim() }; });
+    if (type === "shortText" || type === "longText") question.maxLength = Number(get("maxLength").value);
+    return question;
+  });
+  return { schemaVersion: 1, title: input.title, description: input.description ?? "", target: { kind: input.targetKind, anchorId: input.anchorId, pageNumberHint: input.pageNumberHint ? Number(input.pageNumberHint) : undefined, label: input.targetLabel ?? "" }, trigger: { mode: input.triggerMode }, questions };
+}
+
+function resetSurveyBuilder() {
+  state.editingSurveyId = null;
+  document.querySelector("#surveyBuilderForm").reset();
+  renderQuestionBuilder();
+  document.querySelector("#saveSurveyDraft").textContent = "Opret kladde";
+  document.querySelector("#cancelSurveyEdit").hidden = true;
+}
+
+function editSurvey(survey) {
+  const definition = surveyDefinition(survey);
+  if (!definition) return;
+  state.editingSurveyId = survey.id;
+  const form = document.querySelector("#surveyBuilderForm");
+  for (const [name, value] of Object.entries({ title: definition.title, description: definition.description, targetKind: definition.target.kind, anchorId: definition.target.anchorId, pageNumberHint: definition.target.pageNumberHint ?? "", targetLabel: definition.target.label, triggerMode: definition.trigger.mode })) {
+    if (form.elements[name]) form.elements[name].value = value ?? "";
+  }
+  renderQuestionBuilder(definition.questions);
+  document.querySelector("#saveSurveyDraft").textContent = "Gem kladde";
+  document.querySelector("#cancelSurveyEdit").hidden = false;
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderSurveys(surveys, responses) {
+  state.surveys = surveys; state.surveyResponses = responses;
+  document.querySelector("#surveysTable").innerHTML = surveys.map((survey) => {
+    const definition = surveyDefinition(survey); const surveyResponses = responses.filter((response) => response.surveyId === survey.id);
+    const ratings = surveyResponses.flatMap((response) => response.answers.filter((answer) => typeof answer.value === "number").map((answer) => answer.value));
+    const average = ratings.length ? ` · rating ${(ratings.reduce((sum, value) => sum + value, 0) / ratings.length).toFixed(1)}` : "";
+    const actions = [
+      survey.status !== "closed" ? `<button class="secondary" data-action="edit-survey" data-id="${escapeHtml(survey.id)}">Redigér</button>` : "",
+      survey.draft ? `<button class="secondary" data-action="publish-survey" data-id="${escapeHtml(survey.id)}">Publicér kladde</button>` : "",
+      survey.status === "published" ? `<button class="secondary" data-action="close-survey" data-id="${escapeHtml(survey.id)}">Luk</button>` : "",
+    ].join("");
+    return `<tr><td><strong>${escapeHtml(definition?.title ?? survey.id)}</strong>
+      <small>v${survey.publishedVersion ?? "—"}${survey.draftVersion ? ` · kladde v${survey.draftVersion}` : ""}</small></td>
+      <td>${escapeHtml(definition?.target?.label || definition?.target?.anchorId || "—")}
+        <small>${escapeHtml(definition?.target?.kind ?? "")}${definition?.target?.pageNumberHint ? ` · side ${definition.target.pageNumberHint}` : ""}</small>
+      </td><td>${escapeHtml(statusLabels[survey.status] ?? survey.status)}</td>
+      <td>${surveyResponses.length}${average}</td><td><div class="row-actions">${actions}</div></td></tr>`;
+  }).join("") || emptyRow(5, "Der er endnu ingen surveys.");
+
+  document.querySelector("#surveyResponsesTable").innerHTML = responses.map((response) => {
+    const survey = surveys.find((candidate) => candidate.id === response.surveyId);
+    const version = survey?.versions?.find((candidate) => candidate.version === response.surveyVersion);
+    const questions = new Map((version?.definition?.questions ?? []).map((question) => [question.id, question.prompt]));
+    const answers = response.answers.map((answer) => `<strong>${escapeHtml(questions.get(answer.questionId) ?? answer.questionId)}</strong>: ${escapeHtml(answer.value)}`).join("<br>");
+    return `<tr>
+      <td>${escapeHtml(response.respondent?.displayName ?? response.respondent?.ref ?? "Anonymiseret")}</td>
+      <td>${escapeHtml(version?.definition?.title ?? response.surveyId)}<small>v${response.surveyVersion}</small></td>
+      <td>${answers}</td><td>${escapeHtml(response.revisionId)}
+        <small>${escapeHtml(response.target?.anchorId ?? "")}</small>
+      </td><td>${formatDate(response.updatedAt)}</td>
+    </tr>`;
+  }).join("") || emptyRow(5, "Der er endnu ingen surveybesvarelser.");
 }
 
 function renderAudit(events) {
   document.querySelector("#auditTable").innerHTML = events.map((event) => `<tr><td>${formatDate(event.createdAt)}</td><td>${escapeHtml(event.actorType)}<small>${escapeHtml(event.actorId)}</small></td><td>${escapeHtml(event.action)}</td><td>${escapeHtml(event.resourceType)}<small>${escapeHtml(event.resourceId ?? "")}</small></td></tr>`).join("") || emptyRow(4, "Auditloggen er tom.");
+}
+
+function renderMetadataControls() {
+  state.metadata.accessProfiles ??= fallbackProfiles;
+  const presets = state.metadata.accessPresets ?? Object.keys(state.metadata.accessProfiles);
+  document.querySelector("#accessProfile").innerHTML = presets.map((preset) => option(preset, "", presetLabels[preset] ?? preset)).join("");
+  const permissions = state.metadata.permissions ?? fallbackPermissions;
+  document.querySelector("#scopeGrid").innerHTML = permissions.map((permission) => `<label><input type="checkbox" name="scope" value="${escapeHtml(permission)}">${escapeHtml(permission)}</label>`).join("");
+}
+
+async function loadMetadata(signal) {
+  if (state.metadata.loaded || (!can("access:manage") && !can("tokens:manage"))) return;
+  try {
+    state.metadata = { ...state.metadata, ...await api("/api/admin/metadata", { signal }), loaded: true };
+    renderMetadataControls();
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    toast(`Metadata kunne ikke opdateres: ${error.message}`);
+  }
+}
+
+async function featureApi(allowed, path, fallback, signal, label) {
+  if (!allowed) return fallback;
+  try { return await optionalApi(path, fallback, { signal }); }
+  catch (error) {
+    if (error.name === "AbortError") throw error;
+    toast(`${label} kunne ikke indlæses: ${error.message}`);
+    return fallback;
+  }
 }
 
 async function refreshLibrary(preferredBookId) {
@@ -174,112 +430,324 @@ async function refreshLibrary(preferredBookId) {
 }
 
 async function loadBook(bookId) {
+  state.bookLoadController?.abort();
+  const controller = new AbortController();
+  const generation = ++state.loadGeneration;
+  state.bookLoadController = controller;
+  const workspace = document.querySelector("#bookWorkspace");
+  workspace.hidden = false;
+  workspace.setAttribute("aria-busy", "true");
+  workspace.inert = true;
+  state.loadingBook = true;
+  updateBookNavigationBusy();
   state.bookId = bookId;
-  state.book = state.books.find((book) => book.id === bookId) ?? await api(bookPath());
+  state.book = state.books.find((book) => book.id === bookId) ?? { id: bookId, title: bookId };
+  const path = (segment = "") => bookPath(segment, bookId);
   const url = new URL(location.href); url.searchParams.set("book", bookId); history.replaceState(null, "", url);
   renderBooks();
-  document.querySelector("#pageTitle").textContent = state.book.title ?? state.book.id;
-  document.querySelector("#bookTitle").textContent = state.book.title ?? "Bogbibliotek";
-  document.querySelector("#bookMark").textContent = String(state.book.title ?? "B").slice(0, 2).toUpperCase();
-  document.querySelector("#readerLink").href = readerPath();
-  document.querySelector("#readerUrl").textContent = `${location.origin}${readerPath()}`;
-  for (const link of document.querySelectorAll("[data-export-format]")) link.href = `${bookPath("annotations/export")}?format=${link.dataset.exportFormat}`;
+  try {
+    const bookDetails = await api(path(), { signal: controller.signal });
+    if (generation !== state.loadGeneration) return;
+    state.book = bookDetails.book ?? bookDetails;
+    state.session = bookDetails.session ?? state.session;
+    state.permissions = permissionsFromSession(state.session);
+    applyPermissionVisibility();
+    renderBooks();
+    await loadMetadata(controller.signal);
 
-  const [bookDetails, overview, revisions, members, invitations, codes, tokens, annotations, progress, audit] = await Promise.all([
-    optionalApi(bookPath(), state.book), optionalApi(bookPath("overview"), {}), optionalApi(bookPath("revisions"), { revisions: [] }),
-    optionalApi(bookPath("members"), { members: [] }), optionalApi(bookPath("invitations"), { invitations: [] }), optionalApi(bookPath("access-codes"), { accessCodes: [] }),
-    optionalApi(bookPath("tokens"), { tokens: [] }), optionalApi(bookPath("annotations"), { annotations: [] }), optionalApi(bookPath("progress"), { progress: [] }), optionalApi(bookPath("audit"), { events: [] }),
-  ]);
-  state.book = bookDetails.book ?? bookDetails;
-  const access = bookDetails.access ?? state.book.access ?? { preset: "privateReview", enrollment: "invite" };
-  renderAccess(access);
-  document.querySelector("#metrics").innerHTML = [[overview.members ?? overview.users ?? 0, "Prøvelæsere"], [overview.annotations ?? 0, "Annotationer"], [overview.openAnnotations ?? 0, "Åbne noter"], [list(revisions, "revisions").length, "Revisioner"]].map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
-  document.querySelector("#metrics").removeAttribute("aria-busy");
-  renderRevisions(list(revisions, "revisions")); renderUsers(list(members, "members")); renderInvitations(list(invitations, "invitations"));
-  renderAccessCodes(list(codes, "accessCodes")); renderTokens(list(tokens, "tokens")); renderAnnotations(list(annotations, "annotations")); renderProgress(list(progress, "progress")); renderAudit(list(audit, "events"));
+    document.querySelector("#pageTitle").textContent = state.book.title ?? state.book.id;
+    document.querySelector("#bookTitle").textContent = state.book.title ?? "Bogbibliotek";
+    document.querySelector("#bookMark").textContent = String(state.book.title ?? "B").slice(0, 2).toUpperCase();
+    document.querySelector("#readerLink").href = readerPath();
+    document.querySelector("#readerUrl").textContent = `${location.origin}${readerPath()}`;
+    for (const link of document.querySelectorAll("[data-export-format]")) link.href = `${path("annotations/export")}?format=${link.dataset.exportFormat}`;
+    document.querySelector("#reviewExportLink").href = path("review-export");
+
+    const [overview, revisions, members, invitations, codes, tokens, annotations, progress, audit, surveys, surveyResponses, outline] = await Promise.all([
+      featureApi(can("users:read") && can("annotations:read:all"), path("overview"), {}, controller.signal, "Overblik"),
+      featureApi(can("books:upload") || can("books:publish"), path("revisions"), { revisions: [] }, controller.signal, "Revisioner"),
+      featureApi(can("users:read"), path("members"), { members: [] }, controller.signal, "Brugere"),
+      featureApi(can("users:read"), path("invitations"), { invitations: [] }, controller.signal, "Invitationer"),
+      featureApi(can("users:read"), path("access-codes"), { accessCodes: [] }, controller.signal, "Adgangskoder"),
+      featureApi(can("tokens:manage"), path("tokens"), { tokens: [] }, controller.signal, "Tokens"),
+      featureApi(can("annotations:read:all"), path("annotations"), { annotations: [] }, controller.signal, "Annotationer"),
+      featureApi(can("progress:read:all"), path("progress"), { progress: [] }, controller.signal, "Læsestatus"),
+      featureApi(can("audit:read"), path("audit"), { events: [] }, controller.signal, "Auditlog"),
+      featureApi(can("surveys:manage"), path("surveys"), { surveys: [] }, controller.signal, "Surveys"),
+      featureApi(can("surveys:responses:read"), path("survey-responses"), { responses: [] }, controller.signal, "Surveybesvarelser"),
+      featureApi(can("surveys:manage"), path("outline"), { items: [] }, controller.signal, "Bogankre"),
+    ]);
+    if (generation !== state.loadGeneration) return;
+    if (!document.querySelector("#sharing").hidden) renderAccess(bookDetails.access ?? state.book.access ?? { preset: "privateReview", registration: "inviteOnly" });
+    document.querySelector("#metrics").innerHTML = [[overview.members ?? overview.users ?? 0, "Prøvelæsere"], [overview.annotations ?? 0, "Annotationer"], [overview.openAnnotations ?? 0, "Åbne noter"], [list(revisions, "revisions").length, "Revisioner"]].map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
+    document.querySelector("#metrics").removeAttribute("aria-busy");
+    renderRevisions(list(revisions, "revisions")); renderUsers(list(members, "members")); renderInvitations(list(invitations, "invitations"));
+    renderAccessCodes(list(codes, "accessCodes")); renderTokens(list(tokens, "tokens")); renderAnnotations(list(annotations, "annotations")); renderProgress(list(progress, "progress")); renderAudit(list(audit, "events"));
+    state.outline = list(outline, "items");
+    document.querySelector("#anchorOptions").innerHTML = state.outline.map((item) => `<option value="${escapeHtml(item.anchorId)}">${escapeHtml(item.label || item.title || item.anchorId)}</option>`).join("");
+    renderSurveys(list(surveys, "surveys"), list(surveyResponses, "responses"));
+  } catch (error) {
+    if (error.name !== "AbortError") throw error;
+  } finally {
+    if (generation === state.loadGeneration) {
+      workspace.removeAttribute("aria-busy");
+      workspace.inert = false;
+      state.loadingBook = false;
+      updateBookNavigationBusy();
+    }
+  }
 }
 
 async function load() {
   const config = await api("/api/config");
-  if (!config.session?.capabilities?.canManageUsers && config.session?.principal?.globalRole !== "instance_admin") {
-    document.querySelector("#locked").hidden = false;
-    return;
-  }
+  state.session = config.session;
+  state.permissions = permissionsFromSession(state.session);
+  state.metadata = { accessProfiles: fallbackProfiles, accessPresets: Object.keys(fallbackProfiles), permissions: fallbackPermissions, loaded: false };
+  renderMetadataControls();
+  renderQuestionBuilder();
+  applyPermissionVisibility();
   document.querySelector("#workspace").hidden = false;
   document.querySelector("#adminName").textContent = config.session.principal?.displayName ?? "Administrator";
   document.querySelector("#account").hidden = config.session.principal?.kind !== "user";
-  state.metadata = await optionalApi("/api/admin/metadata", { accessProfiles: fallbackProfiles, accessPresets: Object.keys(fallbackProfiles), permissions: fallbackPermissions });
-  state.metadata.accessProfiles ??= fallbackProfiles;
-  const presets = state.metadata.accessPresets ?? Object.keys(state.metadata.accessProfiles);
-  document.querySelector("#accessProfile").innerHTML = presets.map((preset) => option(preset, "", presetLabels[preset] ?? preset)).join("");
-  const permissions = state.metadata.permissions ?? fallbackPermissions;
-  document.querySelector("#scopeGrid").innerHTML = permissions.map((permission) => `<label><input type="checkbox" name="scope" value="${escapeHtml(permission)}">${escapeHtml(permission)}</label>`).join("");
   await refreshLibrary();
 }
 
-document.querySelector("#bookSelector").addEventListener("change", (event) => loadBook(event.currentTarget.value).catch((error) => toast(error.message)));
+document.querySelector("#bookSelector").addEventListener("change", (event) => loadBook(event.currentTarget.value).catch(ignoreAbort));
 document.querySelector("#createBookForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  try { const payload = await api("/api/admin/books", { method: "POST", json: formObject(event.currentTarget) }); event.currentTarget.reset(); await refreshLibrary(payload.book?.id); toast("Bogen er oprettet som kladde."); } catch (error) { toast(error.message); }
+  const form = event.currentTarget;
+  setFormBusy(form, true);
+  try { const payload = await api("/api/admin/books", { method: "POST", json: formObject(form) }); form.reset(); await refreshLibrary(payload.book?.id); toast("Bogen er oprettet som kladde."); } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
 });
 document.querySelector("#uploadForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const file = event.currentTarget.bundle.files[0];
+  const form = event.currentTarget;
+  const file = form.bundle.files[0];
+  const bookId = state.bookId;
   if (!file?.name.endsWith(".tar.gz")) return toast("Vælg et .tar.gz-bundle.");
+  setFormBusy(form, true);
   const progress = document.querySelector("#uploadProgress"); const status = document.querySelector("#uploadStatus");
   try {
     progress.hidden = false; progress.value = 10; status.textContent = "Opretter sikker upload …";
-    const created = await api(bookPath("uploads"), { method: "POST", json: { filename: file.name, contentType: "application/gzip", sizeBytes: file.size } });
+    const created = await api(bookPath("uploads", bookId), { method: "POST", json: { filename: file.name, contentType: "application/gzip", sizeBytes: file.size } });
     const upload = created.upload ?? created; progress.value = 30; status.textContent = "Uploader bundle …";
     await api(upload.uploadUrl, { method: "PUT", headers: { "Content-Type": "application/gzip" }, body: file });
     progress.value = 75; status.textContent = "Validerer manifest, filer og ankre …";
-    await api(`${bookPath("uploads")}/${encodeURIComponent(upload.id)}/validate`, { method: "POST", json: {} });
+    await api(`${bookPath("uploads", bookId)}/${encodeURIComponent(upload.id)}/validate`, { method: "POST", json: {} });
     progress.value = 100; status.textContent = "Upload valideret. Publicér den nye revision, når du er klar.";
-    const revisions = await api(bookPath("revisions")); renderRevisions(list(revisions, "revisions")); event.currentTarget.reset();
-  } catch (error) { status.textContent = error.message; toast(error.message); } finally { setTimeout(() => { progress.hidden = true; }, 1200); }
+    const revisions = await api(bookPath("revisions", bookId));
+    if (state.bookId === bookId) renderRevisions(list(revisions, "revisions"));
+    form.reset();
+  } catch (error) { status.textContent = error.message; toast(error.message); } finally { setFormBusy(form, false); setTimeout(() => { progress.hidden = true; }, 1200); }
 });
-document.querySelector("#accessProfile").addEventListener("change", (event) => renderAccess({ preset: event.currentTarget.value, ...state.metadata.accessProfiles[event.currentTarget.value], registration: document.querySelector("#enrollmentMode").value }));
+function previewSelectedAccess() {
+  const preset = document.querySelector("#accessProfile").value;
+  renderAccess({ preset, ...state.metadata.accessProfiles[preset], registration: document.querySelector("#enrollmentMode").value });
+}
+document.querySelector("#accessProfile").addEventListener("change", previewSelectedAccess);
+document.querySelector("#enrollmentMode").addEventListener("change", previewSelectedAccess);
 document.querySelector("#accessForm").addEventListener("submit", async (event) => {
-  event.preventDefault(); const errorNode = document.querySelector("#accessError"); errorNode.hidden = true;
-  try { const payload = await api(bookPath("access"), { method: "PUT", json: formObject(event.currentTarget) }); renderAccess(payload.access ?? payload); toast("Bogens adgang er gemt."); } catch (error) { errorNode.textContent = error.message; errorNode.hidden = false; }
+  event.preventDefault(); const form = event.currentTarget; const errorNode = document.querySelector("#accessError"); errorNode.hidden = true;
+  setFormBusy(form, true);
+  try { const payload = await api(bookPath("access"), { method: "PUT", json: formObject(form) }); renderAccess(payload.access ?? payload); toast("Bogens adgang er gemt."); } catch (error) { errorNode.textContent = error.message; errorNode.hidden = false; }
+  finally { setFormBusy(form, false); }
 });
 document.querySelector("#createUserForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const input = { ...formObject(event.currentTarget), bookId: state.bookId };
+  const form = event.currentTarget;
+  const bookId = state.bookId;
+  const input = { ...formObject(form), bookId };
   if (input.phone && !input.phonePurpose) return toast("Angiv formålet, hvis du gemmer telefonnummeret.");
-  try { await api("/api/admin/users", { method: "POST", json: input }); event.currentTarget.reset(); renderUsers(list(await api(bookPath("members")), "members")); toast("Brugeren er oprettet og har fået bogadgang."); } catch (error) { toast(error.message); }
+  setFormBusy(form, true);
+  try { await api("/api/admin/users", { method: "POST", json: input }); form.reset(); const members = await api(bookPath("members", bookId)); if (state.bookId === bookId) renderUsers(list(members, "members")); toast("Brugeren er oprettet og har fået bogadgang."); } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
 });
 document.querySelector("#inviteForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  try { const payload = await api(bookPath("invitations"), { method: "POST", json: formObject(event.currentTarget) }); const invitation = payload.invitation ?? payload; state.invitationUrl = `${location.origin}${readerPath()}?invite=${encodeURIComponent(invitation.secret)}`; document.querySelector("#invitationSecret").textContent = state.invitationUrl; document.querySelector("#invitationOutput").hidden = false; renderInvitations(list(await api(bookPath("invitations")), "invitations")); } catch (error) { toast(error.message); }
+  const form = event.currentTarget;
+  const bookId = state.bookId;
+  const book = state.book;
+  setFormBusy(form, true);
+  try {
+    const payload = await api(bookPath("invitations", bookId), { method: "POST", json: formObject(form) });
+    const invitation = payload.invitation ?? payload;
+    state.invitationUrl = `${location.origin}${readerPath(book)}?invite=${encodeURIComponent(invitation.secret)}`;
+    document.querySelector("#invitationSecret").textContent = state.invitationUrl;
+    document.querySelector("#invitationOutput").hidden = false;
+    if (can("users:read")) { const invitations = await api(bookPath("invitations", bookId)); if (state.bookId === bookId) renderInvitations(list(invitations, "invitations")); }
+  } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
 });
 document.querySelector("#accessCodeForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  try { const payload = await api(bookPath("access-codes"), { method: "POST", json: formObject(event.currentTarget) }); const code = payload.accessCode ?? payload.code ?? payload; state.accessCode = code.secret; const output = document.querySelector("#accessCodeOutput"); output.textContent = `Kopiér nu — koden vises ikke igen: ${code.secret}`; output.hidden = false; renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); } catch (error) { toast(error.message); }
+  const form = event.currentTarget;
+  setFormBusy(form, true);
+  try {
+    const payload = await api(bookPath("access-codes"), { method: "POST", json: formObject(form) });
+    const code = payload.accessCode ?? payload.code ?? payload;
+    state.accessCode = code.secret;
+    const output = document.querySelector("#accessCodeOutput");
+    output.textContent = `Kopiér nu — koden vises ikke igen: ${code.secret}`;
+    output.hidden = false;
+    if (can("users:read")) renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes"));
+  } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
 });
 document.querySelector("#tokenForm").addEventListener("submit", async (event) => {
-  event.preventDefault(); const input = { ...formObject(event.currentTarget), bookIds: [...event.currentTarget.querySelectorAll("[name=tokenBook]:checked")].map((node) => node.value), scopes: [...event.currentTarget.querySelectorAll("[name=scope]:checked")].map((node) => node.value) };
+  event.preventDefault(); const form = event.currentTarget; const input = { ...formObject(form), bookIds: [...form.querySelectorAll("[name=tokenBook]:checked")].map((node) => node.value), scopes: [...form.querySelectorAll("[name=scope]:checked")].map((node) => node.value) };
+  if (!input.instanceAdmin && (!input.bookIds.length || !input.scopes.length)) return toast("Vælg mindst én bog og én permission.");
+  setFormBusy(form, true);
   try { const payload = await api("/api/admin/tokens", { method: "POST", json: input }); const token = payload.token ?? payload; const output = document.querySelector("#tokenOutput"); output.textContent = `Kopiér nu — tokenet vises ikke igen: ${token.secret}`; output.hidden = false; renderTokens(list(await api(bookPath("tokens")), "tokens")); } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
 });
-document.querySelector("#passwordForm").addEventListener("submit", async (event) => { event.preventDefault(); try { await api("/api/auth/password", { method: "POST", json: formObject(event.currentTarget) }); toast("Passwordet er ændret. Log ind igen."); setTimeout(() => location.assign("/"), 800); } catch (error) { toast(error.message); } });
+document.querySelector("#passwordForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setFormBusy(form, true);
+  try {
+    await api("/api/auth/password", { method: "POST", json: formObject(form) });
+    toast("Passwordet er ændret. Log ind igen.");
+    setTimeout(() => location.assign("/"), 800);
+  } catch (error) {
+    toast(error.message);
+    setFormBusy(form, false);
+  }
+});
 document.querySelector("#annotationFilters").addEventListener("input", () => renderAnnotations(state.annotations));
+document.querySelector("#addSurveyQuestion").addEventListener("click", () => {
+  const rows = document.querySelectorAll(".survey-question-editor");
+  if (rows.length >= 5) return toast("V1 understøtter højst fem spørgsmål.");
+  document.querySelector("#surveyQuestionBuilder").insertAdjacentHTML("beforeend", questionEditor({}, rows.length));
+});
+document.querySelector("#cancelSurveyEdit").addEventListener("click", resetSurveyBuilder);
+document.querySelector("#surveyQuestionBuilder").addEventListener("change", (event) => {
+  const select = event.target.closest("[data-question=type]");
+  if (!select) return;
+  const row = select.closest(".survey-question-editor");
+  row.querySelector(".question-rating-fields").hidden = select.value !== "rating";
+  row.querySelector(".question-choice-fields").hidden = select.value !== "singleChoice";
+  row.querySelector(".question-text-fields").hidden = !["shortText", "longText"].includes(select.value);
+  row.querySelector("[data-question=maxLength]").value = select.value === "shortText" ? 300 : 2000;
+});
+document.querySelector("#surveyBuilderForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const bookId = state.bookId;
+  const editingSurveyId = state.editingSurveyId;
+  setFormBusy(form, true);
+  try {
+    const definition = readSurveyDefinition(form);
+    const path = editingSurveyId ? `${bookPath("surveys", bookId)}/${encodeURIComponent(editingSurveyId)}` : bookPath("surveys", bookId);
+    await api(path, { method: editingSurveyId ? "PUT" : "POST", json: definition });
+    const payload = await api(bookPath("surveys", bookId));
+    if (state.bookId === bookId) { renderSurveys(list(payload, "surveys"), state.surveyResponses); resetSurveyBuilder(); }
+    toast("Surveykladden er gemt.");
+  } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
+});
+document.querySelector("#includeProgressExport").addEventListener("change", (event) => {
+  document.querySelector("#reviewExportLink").href = `${bookPath("review-export")}?includeProgress=${event.currentTarget.checked}`;
+});
+document.querySelectorAll("[data-token-preset]").forEach((button) => button.addEventListener("click", () => {
+  const presets = {
+    "reader-agent": ["books:read", "progress:read:self", "surveys:respond"],
+    "review-agent": ["books:read", "annotations:read", "annotations:write", "annotations:export", "surveys:respond"],
+    "survey-admin": ["books:read", "annotations:read", "annotations:read:all", "annotations:export", "surveys:manage", "surveys:responses:read", "surveys:export"],
+  };
+  const selected = new Set(presets[button.dataset.tokenPreset] ?? []);
+  document.querySelectorAll("#scopeGrid [name=scope]").forEach((input) => { input.checked = selected.has(input.value); });
+  toast("Tokenpreset valgt — gennemgå rettighederne før oprettelse.");
+}));
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-action]"); if (!button) return;
+  const actionBookId = state.bookId;
+  const tracksBookMutation = button.dataset.action !== "select-book";
+  if (tracksBookMutation) { state.busyActions += 1; updateBookNavigationBusy(); }
+  button.disabled = true;
   try {
     if (button.dataset.action === "select-book") await loadBook(button.closest("[data-book-id]").dataset.bookId);
     if (button.dataset.action === "archive-book") { const bookId = button.closest("[data-book-id]").dataset.bookId; if (confirm("Arkivér bogen? Læsere mister adgang, men data bevares.")) { await api(`/api/admin/books/${encodeURIComponent(bookId)}`, { method: "DELETE" }); await refreshLibrary(); } }
-    if (button.dataset.action === "publish-revision") { if (confirm("Publicér denne validerede revision for alle læsere?")) { await api(`${bookPath("revisions")}/${encodeURIComponent(button.dataset.id)}/publish`, { method: "POST", json: {} }); await refreshLibrary(state.bookId); toast("Revisionen er publiceret atomisk."); } }
-    if (button.dataset.action === "save-user") { const row = button.closest("[data-user-id]"); const value = (field) => row.querySelector(`[data-field=${field}]`).value; await Promise.all([api(`/api/admin/users/${encodeURIComponent(row.dataset.userId)}`, { method: "PATCH", json: { globalRole: value("globalRole"), status: value("status") } }), api(`${bookPath("members")}/${encodeURIComponent(row.dataset.userId)}`, { method: "PUT", json: { role: value("bookRole") || null } })]); toast("Brugerens adgang er opdateret."); }
-    if (button.dataset.action === "show-password-reset") button.closest("td").querySelector(".password-reset").hidden = false;
-    if (button.dataset.action === "reset-password") { const row = button.closest("[data-user-id]"); const input = row.querySelector("[data-field=newPassword]"); await api(`/api/admin/users/${encodeURIComponent(row.dataset.userId)}/password`, { method: "PUT", json: { newPassword: input.value } }); input.value = ""; button.closest(".password-reset").hidden = true; toast("Password nulstillet; sessioner er lukket."); }
-    if (button.dataset.action === "save-annotation") { const row = button.closest("[data-annotation-id]"); const changes = { status: row.querySelector("[data-field=annotationStatus]").value, category: row.querySelector("[data-field=annotationCategory]").value }; const payload = await api(`${bookPath("annotations")}/${encodeURIComponent(row.dataset.annotationId)}`, { method: "PUT", json: changes }); const updated = payload.annotation ?? payload; state.annotations = state.annotations.map((note) => note.id === updated.id ? updated : note); renderAnnotations(state.annotations); toast("Annotationens triage er gemt."); }
+    if (button.dataset.action === "publish-revision") { if (confirm("Publicér denne validerede revision for alle læsere?")) { await api(`${bookPath("revisions", actionBookId)}/${encodeURIComponent(button.dataset.id)}/publish`, { method: "POST", json: {} }); await refreshLibrary(actionBookId); toast("Revisionen er publiceret atomisk."); } }
+    if (button.dataset.action === "save-user") {
+      const row = button.closest("[data-user-id]");
+      const bookRole = row.querySelector("[data-field=bookRole]").value;
+      if (isInstanceAdmin()) {
+        const globalRole = row.querySelector("[data-field=globalRole]").value;
+        const status = row.querySelector("[data-field=status]").value;
+        if (globalRole !== row.dataset.originalGlobalRole || status !== row.dataset.originalStatus) {
+          await api(`/api/admin/users/${encodeURIComponent(row.dataset.userId)}`, { method: "PATCH", json: { globalRole, status } });
+        }
+      }
+      if (bookRole !== row.dataset.originalBookRole) {
+        await api(`${bookPath("members", actionBookId)}/${encodeURIComponent(row.dataset.userId)}`, { method: "PUT", json: { role: bookRole || null } });
+      }
+      const members = await api(bookPath("members", actionBookId));
+      if (state.bookId === actionBookId) renderUsers(list(members, "members"));
+      toast("Brugerens adgang er opdateret.");
+    }
+    if (button.dataset.action === "show-password-reset") { const reset = button.closest("td").querySelector(".password-reset"); reset.hidden = false; reset.querySelector("input").focus(); }
+    if (button.dataset.action === "reset-password") {
+      const row = button.closest("[data-user-id]");
+      const input = row.querySelector("[data-field=newPassword]");
+      if (input.value.length < 10) throw new Error("Det nye password skal være mindst 10 tegn.");
+      await api(`/api/admin/users/${encodeURIComponent(row.dataset.userId)}/password`, {
+        method: "PUT", json: { newPassword: input.value },
+      });
+      input.value = "";
+      button.closest(".password-reset").hidden = true;
+      toast("Password nulstillet; sessioner er lukket.");
+    }
+    if (button.dataset.action === "save-annotation") {
+      const row = button.closest("[data-annotation-id]");
+      const changes = {
+        status: row.querySelector("[data-field=annotationStatus]").value,
+        category: row.querySelector("[data-field=annotationCategory]").value,
+      };
+      const payload = await api(`${bookPath("annotations")}/${encodeURIComponent(row.dataset.annotationId)}`, {
+        method: "PUT", json: changes,
+      });
+      const updated = payload.annotation ?? payload;
+      state.annotations = state.annotations.map((note) => note.id === updated.id ? updated : note);
+      renderAnnotations(state.annotations);
+      toast("Annotationens triage er gemt.");
+    }
     if (button.dataset.action === "copy-reader-link") await copyText(`${location.origin}${readerPath()}`);
     if (button.dataset.action === "copy-invitation-link") await copyText(state.invitationUrl);
-    if (button.dataset.action === "revoke-invite") { await api(`${bookPath("invitations")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderInvitations(list(await api(bookPath("invitations")), "invitations")); }
-    if (button.dataset.action === "revoke-code") { await api(`${bookPath("access-codes")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); }
-    if (button.dataset.action === "revoke-token") { await api(`/api/admin/tokens/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderTokens(list(await api(bookPath("tokens")), "tokens")); }
+    if (button.dataset.action === "revoke-invite" && confirm("Tilbagekald invitationen? Linket stopper med at virke med det samme.")) { await api(`${bookPath("invitations")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderInvitations(list(await api(bookPath("invitations")), "invitations")); }
+    if (button.dataset.action === "revoke-code" && confirm("Tilbagekald adgangskoden? Den stopper med at virke med det samme.")) { await api(`${bookPath("access-codes")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); }
+    if (button.dataset.action === "revoke-token" && confirm("Tilbagekald tokenet? Agenter, der bruger det, mister adgang med det samme.")) { await api(`/api/admin/tokens/${encodeURIComponent(button.dataset.id)}?bookId=${encodeURIComponent(state.bookId)}`, { method: "DELETE" }); renderTokens(list(await api(bookPath("tokens")), "tokens")); }
+    if (button.dataset.action === "remove-survey-question") {
+      if (document.querySelectorAll(".survey-question-editor").length <= 1) return toast("En survey skal have mindst ét spørgsmål.");
+      button.closest(".survey-question-editor").remove();
+    }
+    if (button.dataset.action === "edit-survey") editSurvey(state.surveys.find((survey) => survey.id === button.dataset.id));
+    if (button.dataset.action === "publish-survey") {
+      if (confirm("Publicér kladden for bogens aktive revision? Versionen kan ikke ændres bagefter.")) {
+        await api(`${bookPath("surveys")}/${encodeURIComponent(button.dataset.id)}/publish`, { method: "POST", json: {} });
+        const [surveys, responses] = await Promise.all([api(bookPath("surveys")), api(bookPath("survey-responses"))]);
+        renderSurveys(list(surveys, "surveys"), list(responses, "responses"));
+        toast("Surveyen er publiceret.");
+      }
+    }
+    if (button.dataset.action === "close-survey") {
+      if (confirm("Luk surveyen? Eksisterende svar bevares, men nye svar afvises.")) {
+        await api(`${bookPath("surveys")}/${encodeURIComponent(button.dataset.id)}/close`, { method: "POST", json: {} });
+        renderSurveys(list(await api(bookPath("surveys")), "surveys"), state.surveyResponses);
+        toast("Surveyen er lukket.");
+      }
+    }
   } catch (error) { toast(error.message); }
+  finally {
+    if (button.isConnected) button.disabled = false;
+    if (tracksBookMutation) { state.busyActions -= 1; updateBookNavigationBusy(); }
+  }
 });
 
-load().catch((error) => { document.querySelector("#locked").hidden = false; document.querySelector("#locked p").textContent = error.message; });
+load().catch((error) => {
+  if (error.name === "AbortError") return;
+  document.querySelector("#workspace").hidden = true;
+  document.querySelector("#locked").hidden = false;
+  document.querySelector("#locked p").textContent = error.message;
+});

@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "book": {
     "id": "annotator-example",
     "title": "Eksempelbog",
@@ -6,6 +7,7 @@
     "mark": "E",
     "language": "da",
     "document": "book.html",
-    "navigation": "navigation.xhtml"
+    "navigation": "navigation.xhtml",
+    "buildId": "canonical-complete-v1"
   }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -28,6 +28,7 @@ async function repository(options = {}) {
 describe("BookCatalogRepository", () => {
   test("migrerer et tomt katalog eksplicit og opretter bøger", async () => {
     const catalog = await repository();
+    expect((await stat(catalog.filePath)).mode & 0o777).toBe(0o600);
     const created = catalog.createBook({ id: "book-one", slug: "book-one", title: "Book One", createdBy: "admin-1" });
 
     expect(created).toMatchObject({ id: "book-one", slug: "book-one", status: "active", activeRevisionId: null });

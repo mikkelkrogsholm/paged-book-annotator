@@ -20,7 +20,7 @@ async function temporaryRoot(prefix = "pba-storage-") {
 }
 
 function bundleFiles(overrides = {}) {
-  const bookHtml = overrides.bookHtml ?? `<!doctype html><html><body><p data-book-anchor="chapter-1" data-annotation-text>Tekst</p></body></html>`;
+  const bookHtml = overrides.bookHtml ?? `<!doctype html><html data-paged-complete="true"><body data-pre-paginated="true"><main class="pagedjs_pages"><section class="pagedjs_page"><p data-book-anchor="chapter-1" data-annotation-text>Tekst</p></section></main></body></html>`;
   const manifest = overrides.manifest ?? { schemaVersion: 1, book: { id: "test-book", title: "Test Book", document: "book.html" } };
   return { "book-viewer.json": JSON.stringify(manifest), "book.html": bookHtml, ...overrides.files };
 }
@@ -111,6 +111,27 @@ describe("LocalBookStorage", () => {
     await expect(storage.importDirectory({ bookId: "test-book", revisionId: "revision-1", sourceDir: source }))
       .rejects.toThrow("symbolske links");
   });
+
+  test("bevarer eksplicit legacy-import for eksisterende bogmapper", async () => {
+    const root = await temporaryRoot();
+    const source = resolve(root, "legacy-source");
+    await Bun.write(resolve(source, "book-viewer.json"), JSON.stringify({
+      server: { port: 9999 },
+      book: {
+        id: "legacy-book",
+        title: "Legacy Book",
+        sourceDir: "/ignored/by/content-contract",
+        document: "book.html",
+      },
+    }));
+    await Bun.write(resolve(source, "book.html"), '<!doctype html><html><body><p data-book-anchor="legacy.chapter" data-annotation-text>Historisk input</p></body></html>');
+    const storage = new LocalBookStorage({ rootDir: resolve(root, "data") });
+
+    const stored = await storage.importDirectory({ bookId: "legacy-book", revisionId: "revision-1", sourceDir: source });
+
+    expect(stored.manifest).toEqual({ schemaVersion: 1, book: { id: "legacy-book", title: "Legacy Book", document: "book.html" } });
+    expect(stored.validation.warnings).toEqual(["legacy_fields_ignored", "legacy_implicit_schema_version"]);
+  });
 });
 
 describe("ManagedBookCatalog", () => {
@@ -132,8 +153,43 @@ describe("ManagedBookCatalog", () => {
       failure = error;
     }
     expect(failure).toBeInstanceOf(BookRevisionUploadError);
+    expect(failure.code).toBe("active_file_forbidden");
+    expect(failure.status).toBe(422);
     expect(catalog.getBook("test-book").activeRevisionId).toBe(first.id);
-    expect(catalog.getRevision("test-book", failure.revisionId).state).toBe("failed");
+    expect(catalog.getRevision("test-book", failure.revisionId)).toMatchObject({ state: "failed", errorCode: "active_file_forbidden" });
+    repository.close();
+  });
+
+  test("afviser nye uploads ved den konfigurerede revisionsgrænse", async () => {
+    const root = await temporaryRoot();
+    const repository = new BookCatalogRepository({ filePath: resolve(root, "data/catalog.sqlite") });
+    const storage = new LocalBookStorage({ rootDir: resolve(root, "data") });
+    const catalog = new ManagedBookCatalog({ repository, storage, maxRevisionsPerBook: 1 });
+    catalog.createBook({ id: "test-book", slug: "test-book", title: "Test Book" });
+    const invalid = await writeArchive(root, bundleFiles({ files: { "invalid.js": "alert(1)" } }), "invalid.tar.gz");
+    await expect(catalog.uploadRevision({ bookId: "test-book", archivePath: invalid })).rejects.toBeInstanceOf(BookRevisionUploadError);
+    await catalog.uploadRevision({ bookId: "test-book", archivePath: await writeArchive(root) });
+    await expect(catalog.uploadRevision({ bookId: "test-book", archivePath: await writeArchive(root, bundleFiles(), "second.tar.gz") }))
+      .rejects.toMatchObject({ status: 409, code: "revision_limit_reached" });
+    repository.close();
+  });
+
+  test("revisionsgrænsen tæller superseded indhold, der stadig ligger på disk", async () => {
+    const root = await temporaryRoot();
+    let number = 0;
+    const repository = new BookCatalogRepository({ filePath: resolve(root, "data/catalog.sqlite"), createId: (prefix) => `${prefix}-${++number}` });
+    const storage = new LocalBookStorage({ rootDir: resolve(root, "data") });
+    const catalog = new ManagedBookCatalog({ repository, storage, maxRevisionsPerBook: 2 });
+    catalog.createBook({ id: "test-book", slug: "test-book", title: "Test Book" });
+    const first = await catalog.uploadRevision({ bookId: "test-book", archivePath: await writeArchive(root, bundleFiles(), "first.tar.gz") });
+    catalog.publishRevision({ bookId: "test-book", revisionId: first.id });
+    const secondBundle = bundleFiles();
+    secondBundle["book.html"] = secondBundle["book.html"].replace("Tekst", "Anden tekst");
+    const second = await catalog.uploadRevision({ bookId: "test-book", archivePath: await writeArchive(root, secondBundle, "second.tar.gz") });
+    catalog.publishRevision({ bookId: "test-book", revisionId: second.id });
+    expect(catalog.getRevision("test-book", first.id).state).toBe("superseded");
+    await expect(catalog.uploadRevision({ bookId: "test-book", archivePath: await writeArchive(root, bundleFiles(), "third.tar.gz") }))
+      .rejects.toMatchObject({ code: "revision_limit_reached" });
     repository.close();
   });
 

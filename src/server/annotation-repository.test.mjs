@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "bun:test";
 
-import { AnnotationRepository } from "./annotation-repository.mjs";
+import { ANNOTATION_LIMITS, AnnotationRepository } from "./annotation-repository.mjs";
 
 function textDraft(comment = "Gør formuleringen mere konkret.") {
   return {
@@ -58,9 +58,12 @@ test("repository creates, updates, resolves and deletes annotations atomically",
     const persisted = JSON.parse(await readFile(filePath, "utf8"));
     assert.equal(persisted.annotations.length, 1);
     assert.equal(persisted.annotations[0].status, "resolved");
+    assert.equal((await stat(filePath)).mode & 0o777, 0o600);
+    assert.equal((await stat(directory)).mode & 0o777, 0o700);
 
     assert.equal(await repository.delete(created.id), true);
     assert.equal((await repository.list()).annotations.length, 0);
+    await assert.rejects(() => repository.create({ type: "page", comment: "Mangler anker", target: { pageNumber: 3 } }), /scopeId/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -121,6 +124,46 @@ test("repository rejects text annotations without an exact quote", async () => {
   }
 });
 
+test("repository enforces annotation field limits before persistence", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "book-viewer-field-limits-"));
+  const repository = new AnnotationRepository({ filePath: join(directory, "annotations.json"), bookId: "test-book" });
+  try {
+    await assert.rejects(
+      () => repository.create(textDraft("x".repeat(ANNOTATION_LIMITS.maxCommentLength + 1))),
+      /comment må højst/,
+    );
+    const oversizedScope = textDraft();
+    oversizedScope.target.scopeId = "s".repeat(ANNOTATION_LIMITS.maxScopeIdLength + 1);
+    await assert.rejects(() => repository.create(oversizedScope), /scopeId må højst/);
+    assert.equal(await Bun.file(join(directory, "annotations.json")).exists(), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("repository rejects excessive annotation counts and oversized files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "book-viewer-total-limits-"));
+  const filePath = join(directory, "annotations.json");
+  const repository = new AnnotationRepository({ filePath, bookId: "test-book" });
+  try {
+    await assert.rejects(
+      () => repository.importDocument({
+        schemaVersion: 4,
+        bookId: "test-book",
+        updatedAt: "2026-07-14T10:00:00.000Z",
+        annotations: Array(ANNOTATION_LIMITS.maxAnnotations + 1).fill({}),
+      }),
+      /må højst indeholde/,
+    );
+
+    await writeFile(filePath, "{}");
+    await truncate(filePath, ANNOTATION_LIMITS.maxDocumentBytes + 1);
+    await assert.rejects(() => repository.list(), /må højst fylde/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("repository preserves concurrent creates without lost updates", async () => {
   const directory = await mkdtemp(join(tmpdir(), "book-viewer-concurrent-"));
   let nextId = 0;
@@ -135,6 +178,35 @@ test("repository preserves concurrent creates without lost updates", async () =>
     const document = await repository.list();
     assert.equal(document.annotations.length, 12);
     assert.equal(new Set(document.annotations.map((annotation) => annotation.id)).size, 12);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("separate repository instances serialize writes to the same annotations file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "annotation-cross-process-lock-"));
+  const filePath = join(directory, "annotations.json");
+  const first = new AnnotationRepository({ filePath, bookId: "book-1", createId: () => "first" });
+  const second = new AnnotationRepository({ filePath, bookId: "book-1", createId: () => "second" });
+  try {
+    await Promise.all([
+      first.create(textDraft("Første")),
+      second.create(textDraft("Anden")),
+    ]);
+    const document = await first.list();
+    assert.deepEqual(document.annotations.map((annotation) => annotation.id).sort(), ["first", "second"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("repository rejects a non-file annotations path", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "annotation-invalid-path-"));
+  const filePath = join(directory, "annotations.json");
+  await mkdir(filePath);
+  const repository = new AnnotationRepository({ filePath, bookId: "book-1" });
+  try {
+    await assert.rejects(() => repository.list(), /regulær fil/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

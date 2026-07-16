@@ -11,16 +11,18 @@ export class BookRevisionUploadError extends Error {
   constructor(message, { revisionId, cause }) {
     super(message, { cause });
     this.name = "BookRevisionUploadError";
-    this.code = "BOOK_REVISION_UPLOAD_FAILED";
+    this.status = 422;
+    this.code = cause?.code ?? "BOOK_REVISION_UPLOAD_FAILED";
     this.revisionId = revisionId;
   }
 }
 
 export class ManagedBookCatalog {
-  constructor({ repository, storage }) {
+  constructor({ repository, storage, maxRevisionsPerBook = 25 }) {
     if (!repository || !storage) throw new TypeError("ManagedBookCatalog kræver repository og storage.");
     this.repository = repository;
     this.storage = storage;
+    this.maxRevisionsPerBook = maxRevisionsPerBook;
   }
 
   createBook(input) { return this.repository.createBook(input); }
@@ -50,7 +52,7 @@ export class ManagedBookCatalog {
   }
 
   async importBookDirectory({ sourceDir, book = {}, createdBy = null, publish = true }) {
-    const { manifest } = await validateBookBundleDirectory(sourceDir, { limits: this.storage.limits });
+    const { manifest } = await validateBookBundleDirectory(sourceDir, { compatibility: "legacy", limits: this.storage.limits });
     const metadata = manifest.book;
     const createdBook = this.repository.createBook({
       id: book.id ?? metadata.id,
@@ -66,6 +68,14 @@ export class ManagedBookCatalog {
   }
 
   async #createRevision({ bookId, sourceKind, createdBy, store }) {
+    const storedRevisionCount = this.repository.listRevisions(bookId)
+      .filter((revision) => Boolean(revision.storageKey)).length;
+    if (storedRevisionCount >= this.maxRevisionsPerBook) {
+      const error = new Error(`Bogen har nået grænsen på ${this.maxRevisionsPerBook} gemte revisioner.`);
+      error.status = 409;
+      error.code = "revision_limit_reached";
+      throw error;
+    }
     const revision = this.repository.beginRevision({ bookId, sourceKind, createdBy });
     try {
       const stored = await store(revision.id);
@@ -74,7 +84,12 @@ export class ManagedBookCatalog {
       await this.storage.removeRevision({ bookId, revisionId: revision.id });
       const message = cause instanceof Error ? cause.message : String(cause);
       try {
-        this.repository.markRevisionFailed({ bookId, revisionId: revision.id, errorCode: "validation_failed", errorMessage: message });
+        this.repository.markRevisionFailed({
+          bookId,
+          revisionId: revision.id,
+          errorCode: cause?.code ?? "validation_failed",
+          errorMessage: message,
+        });
       } catch {
         // Preserve the upload failure. Repository failures are covered by recovery/audit at the integration boundary.
       }

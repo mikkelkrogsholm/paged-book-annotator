@@ -29,7 +29,9 @@ immutable revisioner af hver bog uden at genbygge imaget.
 - attribuerede annotationer med kategori, redaktionel triage, ejerskab, synlighed, moderation og JSON/CSV/Markdown-eksport;
 - læseprogression, der skelner mellem seneste position, engagerede steder og eksplicit færdigmarkering, med fravalg og sletning;
 - admin UI med Share Center, persistente adgangsprofiler, brugere, password-reset, invitationer, triage, tokens og audit;
+- versionsstyrede surveys på stabile side-/afsnitsankre med contextual rating, valg og fritekst, reader-prompt, adminanalyse og samlet review-eksport;
 - MCP over stdio og Streamable HTTP med scoped, udløbende og revokerbare tokens;
+- maskinlæsbare MCP-kontrakter med input/outputskema, permissions, effekter, stabile fejl, eksempler og workflows for alle tools;
 - struktureret, hemmelighedssikker driftslogging, request-id'er og healthcheck;
 - atomisk lagring gennem en API, der kun lytter på localhost;
 - en manifest- og anchor-kontrakt, som er uafhængig af bogens generator.
@@ -44,8 +46,8 @@ docker compose up --build
 
 Eksempelbogen åbnes på `http://127.0.0.1:4174/books/example-book`.
 Administration findes på `http://127.0.0.1:4174/admin`.
-Containerporten publiceres kun på værtens loopback-adresse. `./data/` er det
-eneste bind mount. Ved første start importeres den medfølgende eksempelbog som
+Containerporten publiceres kun på værtens loopback-adresse. Det navngivne
+`pba-data`-volume er containerens eneste skrivbare persistens. Ved første start importeres den medfølgende eksempelbog som
 første katalogrevision; derefter administreres bøger og revisioner i UI'et.
 
 Stop igen med:
@@ -89,6 +91,14 @@ bun scripts/validate-book-document.mjs /absolut/sti/til/bog/book.html
 Opret derefter en bog i `/admin`, upload et `.tar.gz`-bundle og publicér den
 validerede revision. Det samme flow findes som MCP-tools.
 
+Byg en ny, strikt bundle gennem den agent-venlige kontrakt-CLI:
+
+```sh
+bun run bundle init --out ./my-book --id my-book --title "Min bog"
+bun run bundle validate ./my-book --expected-book-id my-book --json
+bun run bundle pack ./my-book --out ./my-book.tar.gz --expected-book-id my-book --json
+```
+
 ## Integration
 
 Se [book bundle-kontrakten](docs/book-bundle.md),
@@ -99,7 +109,7 @@ Vieweren ændrer ikke print-CSS eller den underliggende bog.
 
 Serverens endpoints og sikkerhedsgrænse er beskrevet i
 [Annotations-API](docs/annotations-api.md). Se også
-[adgang, konti og admin](docs/access-and-admin.md), [MCP-laget](docs/mcp.md)
+[adgang, konti og admin](docs/access-and-admin.md), [surveys og review-eksport](docs/surveys-and-review-export.md), [MCP-laget](docs/mcp.md)
 samt [tests og driftslogging](docs/logging-and-testing.md).
 
 ## Backup og restore
@@ -124,6 +134,7 @@ bun run check
 bun run test:server:stability
 bun run validate:example
 bun run validate:bundle example/book
+bun test scripts/pba-bundle.test.mjs
 ```
 
 Kontrollen bruger `Bun.Transpiler` til syntaks og Buns indbyggede test-runner.

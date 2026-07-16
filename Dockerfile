@@ -22,6 +22,10 @@ WORKDIR /app
 
 COPY --from=viewer-builder --chown=bun:bun /app /app
 
+# An empty named volume inherits the mount point's ownership. Keep the runtime
+# non-root while still allowing a first boot to create the catalog in /data.
+RUN mkdir -p /data && chown bun:bun /data
+
 ENV BUN_ENV=production \
     PBA_DATA_DIR=/data
 

@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { Database } from "bun:sqlite";
@@ -81,6 +81,17 @@ export class BookCatalogRepository {
     this.database = new Database(filePath, { create: true, strict: true });
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.migrate();
+    this.secureStorageFiles();
+  }
+
+  secureStorageFiles() {
+    if (this.filePath === ":memory:") return;
+    chmodSync(dirname(this.filePath), 0o700);
+    for (const path of [this.filePath, `${this.filePath}-wal`, `${this.filePath}-shm`]) {
+      try { chmodSync(path, 0o600); } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
   }
 
   migrate() {
@@ -243,6 +254,10 @@ export class BookCatalogRepository {
     });
     publish();
     return { book: this.getBook(normalizedBookId), revision: this.getRevision(normalizedBookId, normalizedRevisionId) };
+  }
+
+  health() {
+    return this.database.query("SELECT 1 AS ready").get()?.ready === 1;
   }
 
   close() {

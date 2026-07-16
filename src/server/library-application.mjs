@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { hasPermission } from "./access-policy.mjs";
@@ -12,8 +12,8 @@ function actorId(principal) {
 
 function instanceAdministrator(principal) {
   return principal?.kind === "local"
-    || principal?.globalRole === "instance_admin"
-    || principal?.instanceAdmin === true;
+    || (principal?.kind === "user" && principal.globalRole === "instance_admin")
+    || (principal?.kind === "token" && principal.instanceAdmin === true);
 }
 
 function deny(message = "Du har ikke adgang til denne handling.") {
@@ -33,6 +33,22 @@ function slug(value) {
   return result;
 }
 
+const MAX_PENDING_UPLOADS_PER_BOOK = 10;
+const ARCHIVED_ADMIN_READ_METHODS = new Set([
+  "listBookOutline", "getBookSection", "searchBook", "getAnnotationContext", "listChangesSince",
+  "listAnnotations", "exportAnnotations", "listSurveys", "getSurvey", "listSurveyResponses",
+  "exportReviewBundle", "listAllProgress", "accessSettings", "listUsers", "listInvitations",
+  "listAccessCodes", "listTokens", "listAudit",
+]);
+
+function validUploadId(value) {
+  const id = String(value ?? "");
+  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(id)) {
+    throw new ApplicationError(404, "Uploaden findes ikke eller er udløbet.", "upload_not_found");
+  }
+  return id;
+}
+
 export class LibraryApplication {
   constructor({ config, catalog, collaborationRepository, clock = () => new Date(), createId = () => `upload-${Bun.randomUUIDv7()}` }) {
     this.config = config;
@@ -44,20 +60,88 @@ export class LibraryApplication {
     this.uploads = new Map();
   }
 
+  get pendingUploadDir() {
+    return join(this.config.library.dataDir, "uploads", "pending");
+  }
+
+  uploadMetadataPath(uploadId) {
+    return join(this.pendingUploadDir, `${validUploadId(uploadId)}.json`);
+  }
+
+  async persistUpload(upload) {
+    await mkdir(this.pendingUploadDir, { recursive: true, mode: 0o700 });
+    await chmod(this.pendingUploadDir, 0o700);
+    const metadataPath = this.uploadMetadataPath(upload.id);
+    const temporaryPath = `${metadataPath}.${Bun.randomUUIDv7()}.tmp`;
+    await writeFile(temporaryPath, `${JSON.stringify(upload)}\n`, { mode: 0o600 });
+    await rename(temporaryPath, metadataPath);
+    await chmod(metadataPath, 0o600);
+    this.uploads.set(upload.id, upload);
+  }
+
+  async removeUpload(upload) {
+    if (!upload) return;
+    const id = validUploadId(upload.id);
+    this.uploads.delete(id);
+    await Promise.all([
+      rm(join(this.pendingUploadDir, `${id}.tar.gz`), { force: true }),
+      rm(this.uploadMetadataPath(id), { force: true }),
+    ]);
+  }
+
+  async cleanupUploads() {
+    await mkdir(this.pendingUploadDir, { recursive: true, mode: 0o700 });
+    await chmod(this.pendingUploadDir, 0o700);
+    const entries = await readdir(this.pendingUploadDir);
+    const active = [];
+    for (const entry of entries.filter((name) => name.endsWith(".json"))) {
+      const id = entry.slice(0, -5);
+      try {
+        const upload = JSON.parse(await readFile(this.uploadMetadataPath(id), "utf8"));
+        upload.filePath = join(this.pendingUploadDir, `${id}.tar.gz`);
+        if (upload.id !== id || upload.expiresAt <= this.clock().toISOString()) await this.removeUpload(upload);
+        else active.push(upload);
+      } catch {
+        await rm(join(this.pendingUploadDir, entry), { force: true });
+        await rm(join(this.pendingUploadDir, `${id}.tar.gz`), { force: true });
+      }
+    }
+    return active;
+  }
+
   get defaultBookId() {
-    if (this.config.library.defaultBookId && this.catalog.getBook(this.config.library.defaultBookId)) return this.config.library.defaultBookId;
+    const configured = this.config.library.defaultBookId && this.catalog.getBook(this.config.library.defaultBookId);
+    if (configured?.status === "active") return configured.id;
     return this.catalog.listBooks()[0]?.id ?? "";
   }
 
-  resolveBookId(value) {
+  async health() {
+    const storage = {
+      catalog: this.catalog.repository?.health?.() ? "ok" : "unavailable",
+      collaboration: this.collaboration.health() ? "ok" : "unavailable",
+      annotations: "ok",
+    };
+    const bookId = this.defaultBookId;
+    if (bookId) {
+      const bookHealth = await this.serviceForBook(bookId).health();
+      storage.annotations = bookHealth.annotations;
+    }
+    return storage;
+  }
+
+  resolveBookId(value, { includeArchived = false } = {}) {
     const requested = String(value ?? "");
-    const book = this.catalog.getBook(requested) ?? this.catalog.listBooks({ includeArchived: true }).find((item) => item.slug === requested);
+    const byId = this.catalog.getBook(requested);
+    const book = byId ?? this.catalog.listBooks({ includeArchived }).find((item) => item.slug === requested);
     if (!book) throw new ApplicationError(404, "Bogen findes ikke.", "book_not_found");
+    if (book.status === "archived" && !includeArchived) {
+      throw new ApplicationError(410, "Bogen er arkiveret.", "book_archived");
+    }
     return book.id;
   }
 
-  bookContext(bookId) {
-    bookId = this.resolveBookId(bookId);
+  bookContext(bookId, { includeArchived = false } = {}) {
+    bookId = this.resolveBookId(bookId, { includeArchived });
     const book = this.catalog.getBook(bookId);
     if (!book) throw new ApplicationError(404, "Bogen findes ikke.", "book_not_found");
     const revision = book.activeRevisionId ? this.catalog.getRevision(book.id, book.activeRevisionId) : null;
@@ -87,8 +171,8 @@ export class LibraryApplication {
     };
   }
 
-  serviceForBook(bookId) {
-    const context = this.bookContext(bookId);
+  serviceForBook(bookId, { includeArchived = false } = {}) {
+    const context = this.bookContext(bookId, { includeArchived });
     bookId = context.book.id;
     const cacheKey = `${bookId}:${context.revision?.id ?? "unpublished"}`;
     const cached = this.services.get(cacheKey);
@@ -138,12 +222,21 @@ export class LibraryApplication {
 
   async acceptAccessCode({ bookId, accessCode, email, displayName, password, phone, phonePurpose }) {
     this.bookContext(bookId);
+    await this.collaboration.validateAccessCode(accessCode, bookId);
     let user = this.collaboration.getUserByEmail(email);
-    if (!user) user = await this.collaboration.createUser({ email, displayName, password });
-    else if (!await this.collaboration.authenticate(email, password, null)) {
+    let createdUser = false;
+    if (!user) {
+      user = await this.collaboration.createUser({ email, displayName, password });
+      createdUser = true;
+    } else if (!await this.collaboration.authenticate(email, password, null)) {
       throw new ApplicationError(401, "E-mail eller password er forkert.", "invalid_credentials");
     }
-    await this.collaboration.enrollUser({ userId: user.id, bookId, method: "code", accessCode });
+    try {
+      await this.collaboration.enrollUser({ userId: user.id, bookId, method: "code", accessCode });
+    } catch (error) {
+      if (createdUser) this.collaboration.discardUnenrolledUser(user.id);
+      throw error;
+    }
     if (phone) this.collaboration.saveReviewerProfile(user.id, { bookId, phone, phonePurpose });
     const principal = this.collaboration.principalForUser(user.id, bookId);
     const session = await this.collaboration.createSession(user.id);
@@ -159,9 +252,10 @@ export class LibraryApplication {
     if (!hasPermission(this.principalForBook(principal, bookId), permission, bookId)) deny();
   }
 
-  listBooks(principal) {
-    return this.catalog.listBooks().filter((book) => {
+  listBooks(principal, { includeArchived = false } = {}) {
+    return this.catalog.listBooks({ includeArchived }).filter((book) => {
       if (instanceAdministrator(principal)) return true;
+      if (book.status === "archived") return hasPermission(this.principalForBook(principal, book.id), "books:read", book.id);
       try {
         this.serviceForBook(book.id).assertCanRead(this.principalForBook(principal, book.id));
         return true;
@@ -171,9 +265,12 @@ export class LibraryApplication {
     }).map((book) => ({ ...book, activeRevision: book.activeRevisionId ? this.catalog.getRevision(book.id, book.activeRevisionId) : null }));
   }
 
-  getBook(principal, bookId) {
-    const book = this.bookContext(bookId).book;
-    if (!instanceAdministrator(principal)) this.serviceForBook(bookId).assertCanRead(this.principalForBook(principal, bookId));
+  getBook(principal, bookId, { includeArchived = false } = {}) {
+    const book = this.bookContext(bookId, { includeArchived }).book;
+    if (!instanceAdministrator(principal)) {
+      if (book.status === "archived") this.assertBookPermission(principal, "books:read", bookId);
+      else this.serviceForBook(bookId).assertCanRead(this.principalForBook(principal, bookId));
+    }
     return { ...book, activeRevision: book.activeRevisionId ? this.catalog.getRevision(bookId, book.activeRevisionId) : null };
   }
 
@@ -195,52 +292,67 @@ export class LibraryApplication {
     return book;
   }
 
-  createBookUpload(principal, bookId, input = {}) {
+  async createBookUpload(principal, bookId, input = {}) {
     this.assertBookPermission(principal, "books:upload", bookId);
     this.bookContext(bookId);
+    const pending = await this.cleanupUploads();
+    if (pending.filter((upload) => upload.bookId === bookId).length >= MAX_PENDING_UPLOADS_PER_BOOK) {
+      throw new ApplicationError(429, "Der er for mange afventende uploads til bogen.", "upload_limit_reached");
+    }
     const id = this.createId();
     const filename = safeUploadName(input.filename);
     const expiresAt = new Date(this.clock().getTime() + 60 * 60 * 1000).toISOString();
     const filePath = join(this.config.library.dataDir, "uploads", "pending", `${id}.tar.gz`);
-    this.uploads.set(id, { id, bookId, filename, filePath, expiresAt, uploaded: false });
+    await this.persistUpload({ id, bookId, filename, filePath, expiresAt, uploaded: false });
     return { upload: { id, bookId, filename, uploadUrl: `/api/admin/books/${encodeURIComponent(bookId)}/uploads/${encodeURIComponent(id)}/content`, expiresAt } };
   }
 
-  uploadRecord(bookId, uploadId) {
-    const upload = this.uploads.get(uploadId);
+  async uploadRecord(bookId, uploadId) {
+    uploadId = validUploadId(uploadId);
+    let upload = this.uploads.get(uploadId);
+    if (!upload) {
+      try {
+        upload = JSON.parse(await readFile(this.uploadMetadataPath(uploadId), "utf8"));
+        upload.filePath = join(this.pendingUploadDir, `${uploadId}.tar.gz`);
+      } catch {}
+    }
     if (!upload || upload.bookId !== bookId || upload.expiresAt <= this.clock().toISOString()) {
+      if (upload) await this.removeUpload(upload);
       throw new ApplicationError(404, "Uploaden findes ikke eller er udløbet.", "upload_not_found");
     }
+    this.uploads.set(uploadId, upload);
     return upload;
   }
 
   async writeBookUpload(principal, bookId, uploadId, request) {
     this.assertBookPermission(principal, "books:upload", bookId);
-    const upload = this.uploadRecord(bookId, uploadId);
+    const upload = await this.uploadRecord(bookId, uploadId);
     const declaredBytes = Number(request.headers.get("content-length") ?? 0);
     if (declaredBytes > this.config.library.uploadMaxBytes) throw new ApplicationError(413, "Uploaden er for stor.", "upload_too_large");
-    await mkdir(dirname(upload.filePath), { recursive: true });
+    await mkdir(dirname(upload.filePath), { recursive: true, mode: 0o700 });
+    await chmod(dirname(upload.filePath), 0o700);
     const written = await Bun.write(upload.filePath, request);
     if (written > this.config.library.uploadMaxBytes) {
       await rm(upload.filePath, { force: true });
       throw new ApplicationError(413, "Uploaden er for stor.", "upload_too_large");
     }
+    await chmod(upload.filePath, 0o600);
     upload.uploaded = true;
     upload.sizeBytes = written;
+    await this.persistUpload(upload);
     return { upload: { id: upload.id, bookId, filename: upload.filename, sizeBytes: written, expiresAt: upload.expiresAt } };
   }
 
   async validateBookUpload(principal, bookId, uploadId) {
     this.assertBookPermission(principal, "books:upload", bookId);
-    const upload = this.uploadRecord(bookId, uploadId);
+    const upload = await this.uploadRecord(bookId, uploadId);
     if (!upload.uploaded) throw new TypeError("Uploaden mangler indhold.");
     try {
       const revision = await this.catalog.uploadRevision({ bookId, archivePath: upload.filePath, createdBy: actorId(principal) });
       this.collaboration.audit({ principal, action: "book_revision.validate", resourceType: "book_revision", resourceId: revision.id, bookId });
       return { revision };
     } finally {
-      this.uploads.delete(uploadId);
-      await rm(upload.filePath, { force: true });
+      await this.removeUpload(upload);
     }
   }
 
@@ -258,8 +370,19 @@ export class LibraryApplication {
   }
 
   delegate(principal, bookId, method, ...arguments_) {
-    const service = this.serviceForBook(bookId);
-    return service[method](this.principalForBook(principal, bookId), ...arguments_);
+    const resolvedBookId = this.resolveBookId(bookId, { includeArchived: true });
+    const book = this.catalog.getBook(resolvedBookId);
+    let includeArchived = false;
+    if (book.status === "archived") {
+      const archivedAdmin = principal?.kind !== "token"
+        && (instanceAdministrator(principal) || hasPermission(this.principalForBook(principal, resolvedBookId), "books:settings", resolvedBookId));
+      if (!archivedAdmin || !ARCHIVED_ADMIN_READ_METHODS.has(method)) {
+        throw new ApplicationError(410, "Bogen er arkiveret.", "book_archived");
+      }
+      includeArchived = true;
+    }
+    const service = this.serviceForBook(resolvedBookId, { includeArchived });
+    return service[method](this.principalForBook(principal, resolvedBookId), ...arguments_);
   }
 
   listBookOutline(principal, bookId, options) { return this.delegate(principal, bookId, "listBookOutline", options); }
@@ -273,6 +396,17 @@ export class LibraryApplication {
   deleteAnnotation(principal, bookId, id) { return this.delegate(principal, bookId, "deleteAnnotation", id); }
   importAnnotations(principal, bookId, document, mode) { return this.delegate(principal, bookId, "importAnnotations", document, mode); }
   exportAnnotations(principal, bookId, format) { return this.delegate(principal, bookId, "exportAnnotations", format); }
+  listActiveSurveys(principal, bookId) { return this.delegate(principal, bookId, "listActiveSurveys"); }
+  getSurvey(principal, bookId, id) { return this.delegate(principal, bookId, "getSurvey", id); }
+  getMySurveyResponse(principal, bookId, id) { return this.delegate(principal, bookId, "getMySurveyResponse", id); }
+  submitSurveyResponse(principal, bookId, id, answers) { return this.delegate(principal, bookId, "submitSurveyResponse", id, answers); }
+  listSurveys(principal, bookId, options) { return this.delegate(principal, bookId, "listSurveys", options); }
+  createSurvey(principal, bookId, definition) { return this.delegate(principal, bookId, "createSurvey", definition); }
+  updateSurveyDraft(principal, bookId, id, definition) { return this.delegate(principal, bookId, "updateSurveyDraft", id, definition); }
+  publishSurvey(principal, bookId, id) { return this.delegate(principal, bookId, "publishSurvey", id); }
+  closeSurvey(principal, bookId, id) { return this.delegate(principal, bookId, "closeSurvey", id); }
+  listSurveyResponses(principal, bookId, options) { return this.delegate(principal, bookId, "listSurveyResponses", options); }
+  exportReviewBundle(principal, bookId, options) { return this.delegate(principal, bookId, "exportReviewBundle", options); }
   getProgress(principal, bookId) { return this.delegate(principal, bookId, "getProgress"); }
   saveProgress(principal, bookId, input) { return this.delegate(principal, bookId, "saveProgress", input); }
   listAllProgress(principal, bookId) { return this.delegate(principal, bookId, "listAllProgress"); }
@@ -294,12 +428,15 @@ export class LibraryApplication {
   }
 
   createUser(principal, input) {
+    if (!instanceAdministrator(principal)) deny("Kun en instansadministrator kan oprette globale brugerkonti.");
     if (input.bookId) return this.delegate(principal, input.bookId, "createUser", input);
-    if (!instanceAdministrator(principal)) deny();
     return this.collaboration.createUser(input);
   }
 
   updateUser(principal, userId, input) {
+    if ((input.globalRole !== undefined || input.status !== undefined) && !instanceAdministrator(principal)) {
+      deny("Kun en instansadministrator kan ændre globale kontooplysninger.");
+    }
     const bookId = input.bookId ?? this.defaultBookId;
     return this.delegate(principal, bookId, "updateUser", userId, {
       ...input,
@@ -308,6 +445,7 @@ export class LibraryApplication {
   }
 
   resetUserPassword(principal, userId, newPassword) {
+    if (!instanceAdministrator(principal)) deny("Kun en instansadministrator kan nulstille andre brugeres passwords.");
     const bookId = this.defaultBookId;
     return this.delegate(principal, bookId, "resetUserPassword", userId, newPassword);
   }
@@ -317,17 +455,39 @@ export class LibraryApplication {
     const grants = instanceAdmin ? [] : input.grants ?? (input.bookIds?.length
       ? input.bookIds.map((bookId) => ({ bookId, permissions: input.scopes }))
       : undefined);
+    for (const grant of grants ?? []) this.bookContext(grant.bookId);
     const bookId = grants?.[0]?.bookId ?? input.bookId ?? this.defaultBookId;
-    return this.delegate(principal, bookId, "createToken", { ...input, instanceAdmin, grants });
+    const effectivePrincipal = principal?.kind === "user" && grants?.length
+      ? {
+        ...principal,
+        memberships: grants.map((grant) => this.collaboration.principalForUser(principal.id, grant.bookId)?.membership).filter(Boolean),
+      }
+      : principal;
+    return this.serviceForBook(bookId).createToken(effectivePrincipal, { ...input, instanceAdmin, grants });
   }
 
   listTokens(principal, options = {}) {
+    if (!options?.bookId && instanceAdministrator(principal)) {
+      return this.collaboration.listServiceTokens(null, { includeInstanceAdmin: true, includeAllBookGrants: true });
+    }
     const bookId = options?.bookId ?? this.defaultBookId;
     return this.delegate(principal, bookId, "listTokens");
   }
 
-  revokeToken(principal, id) {
-    return this.delegate(principal, this.defaultBookId, "revokeToken", id);
+  revokeToken(principal, id, { bookId = this.defaultBookId } = {}) {
+    if (instanceAdministrator(principal)) {
+      const token = this.collaboration.listServiceTokens(null, { includeInstanceAdmin: true, includeAllBookGrants: true })
+        .find((candidate) => candidate.id === id);
+      const revoked = this.collaboration.revokeServiceToken(id, null, { allowGlobal: true });
+      if (revoked && token) {
+        const bookIds = token.bookGrants.length ? token.bookGrants.map((grant) => grant.bookId) : [null];
+        for (const bookId of bookIds) {
+          this.collaboration.audit({ principal, action: "token.revoke", resourceType: "service_token", resourceId: id, bookId });
+        }
+      }
+      return revoked;
+    }
+    return this.delegate(principal, bookId, "revokeToken", id);
   }
 
   listAudit(principal, options = {}) {
@@ -335,22 +495,28 @@ export class LibraryApplication {
     return this.delegate(principal, bookId, "listAudit", options);
   }
 
-  async exportUserData(principal, userId = actorId(principal)) {
-    if (!userId || (userId !== actorId(principal) && !instanceAdministrator(principal))) deny();
+  async exportUserData(principal, userId) {
+    if (userId === undefined) {
+      if (principal?.kind !== "user") deny("Selvbetjent kontoeksport kræver en brugersession.");
+      userId = principal.id;
+    } else if (!userId || (principal?.kind !== "user" || userId !== principal.id) && !instanceAdministrator(principal)) deny();
     const account = this.collaboration.exportUserData(userId);
     const annotations = [];
     for (const book of this.catalog.listBooks({ includeArchived: true })) {
-      const document = await this.serviceForBook(book.id).annotations.list();
-      annotations.push(...document.annotations.filter((annotation) => annotation.author.id === userId));
+      const document = await this.serviceForBook(book.id, { includeArchived: true }).annotations.list();
+      annotations.push(...document.annotations.filter((annotation) => annotation.author.id === userId || annotation.updatedBy.id === userId));
     }
     return { ...account, annotations };
   }
 
-  async eraseUserData(principal, userId = actorId(principal)) {
-    if (!userId || (userId !== actorId(principal) && !instanceAdministrator(principal))) deny();
+  async eraseUserData(principal, userId) {
+    if (userId === undefined) {
+      if (principal?.kind !== "user") deny("Selvbetjent kontosletning kræver en brugersession.");
+      userId = principal.id;
+    } else if (!userId || (principal?.kind !== "user" || userId !== principal.id) && !instanceAdministrator(principal)) deny();
     this.collaboration.audit({ principal, action: "user.erase", resourceType: "user", resourceId: userId, bookId: null });
     for (const book of this.catalog.listBooks({ includeArchived: true })) {
-      await this.serviceForBook(book.id).annotations.anonymizeAuthor(userId);
+      await this.serviceForBook(book.id, { includeArchived: true }).annotations.anonymizeAuthor(userId);
     }
     return this.collaboration.eraseUserData(userId);
   }

@@ -75,6 +75,7 @@ test("operational logger is fail-safe when its clock, fields or sink fail", () =
 
   const fieldsFailure = createOperationalLogger();
   const fields = {};
+  // agent-lint: disable=AR004 -- The adversarial getter is the failure mode under test, not production dispatch.
   Object.defineProperty(fields, "explodes", { enumerable: true, get: () => { throw new Error("getter unavailable"); } });
   assert.doesNotThrow(() => fieldsFailure.info("request.completed", fields));
   assert.equal(fieldsFailure.info("request.completed", fields), null);

@@ -5,6 +5,9 @@ import { AuthController } from "./auth/auth-controller.js";
 import { NavigationController } from "./navigation/navigation-controller.js";
 import { BookReader } from "./reader/book-reader.js";
 import { ProgressClient } from "./reader/progress-client.js";
+import { SurveyApi } from "./surveys/survey-api.js";
+import { SurveyController } from "./surveys/survey-controller.js";
+import { showUiToast } from "./ui-state.js";
 
 const bookRoute = window.location.pathname.match(/^\/books\/([^/]+)\/?$/);
 const routeBookId = bookRoute ? decodeURIComponent(bookRoute[1]) : "";
@@ -33,6 +36,12 @@ function showStartupError(error) {
   status.querySelector("span").textContent = "Bogen kunne ikke åbnes";
 }
 
+function showFeatureError(message) {
+  showUiToast(message, { error: true, duration: 4_200 });
+}
+
+class AccessGateError extends Error {}
+
 try {
   const config = await fetchConfig();
   applyBookIdentity(config);
@@ -43,8 +52,11 @@ try {
     document.querySelector("#accessGate").hidden = false;
     document.querySelector("#readerShell").hidden = true;
     document.querySelector(".control-shell").hidden = true;
+    document.querySelector("#navigationPanelButton").hidden = true;
+    document.querySelector("#annotationPanelButton").hidden = true;
+    document.querySelector("#surveyPanelButton").hidden = true;
     document.querySelector("#renderStatus span").textContent = "Login kræves";
-    throw new Error("Log ind for at åbne bogen.");
+    throw new AccessGateError("Log ind for at åbne bogen.");
   }
 
   const showsAnnotations = capabilities.canViewAnnotations || capabilities.canCreateAnnotations;
@@ -52,6 +64,7 @@ try {
   document.querySelector("#elementModeButton").hidden = !capabilities.canCreateAnnotations;
   document.querySelector("#pageAnnotationButton").hidden = !capabilities.canCreateAnnotations;
   document.querySelector("#selectionAction").hidden = true;
+  document.querySelector("#surveyPanelButton").hidden = true;
 
   const reader = new BookReader({
     frame: document.querySelector("#bookFrame"),
@@ -59,13 +72,17 @@ try {
     bookUrl: config.book.documentUrl,
     paginationTimeoutMs: config.book.paginationTimeoutMs,
   });
-  const panel = new AnnotationPanel({ capabilities, principal: config.session.principal });
+  const panel = new AnnotationPanel({
+    capabilities,
+    principal: config.session.principal,
+    exportUrl: `${apiBase}/annotations/export`,
+  });
   const navigation = new NavigationController({
     reader,
     navigationUrl: config.book.navigationUrl,
-    onOpen: () => panel.close(),
+    onOpen: () => panel.close({ restoreFocus: false }),
   });
-  panel.panelButton.addEventListener("click", () => navigation.close());
+  panel.panelButton.addEventListener("click", () => navigation.close({ restoreFocus: false }));
   const annotations = new AnnotationController({
     api: new AnnotationApi({ baseUrl: `${apiBase}/annotations` }),
     panel,
@@ -74,26 +91,37 @@ try {
     capabilities,
     principal: config.session.principal,
   });
+  const surveys = new SurveyController({
+    api: new SurveyApi({ baseUrl: `${apiBase}/surveys` }),
+    reader,
+    capabilities,
+  });
+  surveys.addEventListener("open", () => { panel.close({ restoreFocus: false }); navigation.close({ restoreFocus: false }); });
+  panel.panelButton.addEventListener("click", () => surveys.close({ restoreFocus: false }));
+  document.querySelector("#navigationPanelButton").addEventListener("click", () => surveys.close({ restoreFocus: false }));
+
+  await reader.start();
 
   const progressClient = new ProgressClient({ baseUrl: `${apiBase}/progress` });
   const progressEnabled = capabilities.progressTracking !== "off";
-  const preference = progressEnabled ? await progressClient.getPreference() : { trackingEnabled: false };
-  let trackingEnabled = preference.trackingEnabled;
+  let trackingEnabled = false;
+  let priorProgress = null;
+  if (progressEnabled) {
+    try {
+      const preference = await progressClient.getPreference();
+      trackingEnabled = preference.trackingEnabled;
+      if (trackingEnabled) priorProgress = await progressClient.get();
+    } catch (error) {
+      console.warn(error);
+      showFeatureError("Læsestatus er midlertidigt utilgængelig. Bogen kan stadig læses.");
+    }
+  }
   const trackingToggle = document.querySelector("#readingTrackingToggle");
   trackingToggle.checked = trackingEnabled;
-  trackingToggle.addEventListener("change", async () => {
-    trackingToggle.disabled = true;
-    try {
-      trackingEnabled = (await progressClient.setPreference(trackingToggle.checked)).trackingEnabled;
-      if (!trackingEnabled) { window.clearTimeout(positionTimer); window.clearTimeout(engagementTimer); latestProgress = null; }
-      else if (reader.ready) observeProgress({ pageNumbers: reader.currentPageNumbers(), anchor: reader.currentPrimaryAnchor() });
-    }
-    catch (error) { trackingToggle.checked = trackingEnabled; console.warn(error); }
-    finally { trackingToggle.disabled = false; }
-  });
-  const priorProgress = progressEnabled && trackingEnabled ? await progressClient.get() : null;
-  if (priorProgress?.pageNumber && !window.location.hash) window.location.hash = `page=${priorProgress.pageNumber}`;
-  let trackingReady = false;
+  trackingToggle.closest(".tracking-preference").hidden = !progressEnabled;
+  document.querySelector(".tracking-preference + small").hidden = !progressEnabled;
+  document.querySelector("#markCompleteButton").hidden = !progressEnabled;
+  let trackingReady = true;
   let positionTimer = null;
   let engagementTimer = null;
   let latestProgress = null;
@@ -108,20 +136,44 @@ try {
     positionTimer = window.setTimeout(() => progressClient.save(latestProgress).catch((error) => console.warn(error)), 350);
     engagementTimer = window.setTimeout(() => progressClient.save({ ...latestProgress, event: "engaged" }).catch((error) => console.warn(error)), 8_000);
   };
+  trackingToggle.addEventListener("change", async () => {
+    trackingToggle.disabled = true;
+    try {
+      trackingEnabled = (await progressClient.setPreference(trackingToggle.checked)).trackingEnabled;
+      if (!trackingEnabled) { window.clearTimeout(positionTimer); window.clearTimeout(engagementTimer); latestProgress = null; }
+      else if (reader.ready) observeProgress({ pageNumbers: reader.currentPageNumbers(), anchor: reader.currentPrimaryAnchor() });
+    }
+    catch (error) { trackingToggle.checked = trackingEnabled; showFeatureError(error.message); }
+    finally { trackingToggle.disabled = false; }
+  });
   reader.addEventListener("pagechange", (event) => observeProgress(event.detail));
-  document.querySelector("#markCompleteButton").addEventListener("click", async () => {
+  document.querySelector("#markCompleteButton").addEventListener("click", async (event) => {
     if (!latestProgress || !trackingEnabled) return;
-    try { await progressClient.save({ ...latestProgress, event: "complete", percent: 100 }); document.querySelector("#markCompleteButton").textContent = "Markeret som læst"; }
-    catch (error) { console.warn(error); }
+    const button = event.currentTarget;
+    button.disabled = true;
+    try { await progressClient.save({ ...latestProgress, event: "complete", percent: 100 }); button.textContent = "Markeret som læst"; }
+    catch (error) { showFeatureError(error.message); button.disabled = false; }
   });
 
-  await reader.start();
-  trackingReady = true;
   if (priorProgress?.anchorId) reader.goToTarget(priorProgress.anchorId);
+  else if (priorProgress?.pageNumber) reader.goToPageNumber(priorProgress.pageNumber);
   observeProgress({ pageNumbers: reader.currentPageNumbers(), anchor: reader.currentPrimaryAnchor() });
-  await Promise.all([showsAnnotations ? annotations.start() : Promise.resolve(), navigation.start()]);
+  const featureStarts = [
+    { name: "Kommentarer", enabled: showsAnnotations, start: () => annotations.start() },
+    { name: "Indholdsfortegnelsen", enabled: true, start: () => navigation.start() },
+    { name: "Feedback", enabled: capabilities.canRespondToSurveys, start: () => surveys.start() },
+  ].filter((feature) => feature.enabled);
+  const results = await Promise.allSettled(featureStarts.map((feature) => feature.start()));
+  results.forEach((result, index) => {
+    if (result.status !== "rejected") return;
+    console.warn(result.reason);
+    if (featureStarts[index].name === "Feedback") document.querySelector("#surveyPanelButton").hidden = true;
+    showFeatureError(`${featureStarts[index].name} er midlertidigt utilgængelig. Bogen kan stadig læses.`);
+  });
 } catch (error) {
-  if (!document.querySelector("#accessGate")?.hidden) console.info(error.message);
-  else showStartupError(error);
-  console.error(error);
+  if (error instanceof AccessGateError) console.info(error.message);
+  else {
+    showStartupError(error);
+    console.error(error);
+  }
 }
