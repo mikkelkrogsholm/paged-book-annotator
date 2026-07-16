@@ -126,6 +126,13 @@
       </div>
     </div>
   </main>
+  <dialog class="confirmation-dialog" id="confirmationDialog" aria-labelledby="confirmationTitle">
+    <form method="dialog">
+      <h2 id="confirmationTitle">Bekræft handling</h2>
+      <p data-confirmation-message></p>
+      <div class="confirmation-actions"><button class="secondary" type="submit" value="cancel" autofocus>Annullér</button><button type="submit" value="confirm">Bekræft</button></div>
+    </form>
+  </dialog>
   <div class="toast" id="toast" hidden role="status"></div>
   <script type="module" src="/admin/admin.js"></script>
 </body>

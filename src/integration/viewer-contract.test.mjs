@@ -81,6 +81,20 @@ test("an empty managed library remains an interactive authentication state", asy
   assert.match(admin, /if \(!hasAdminAccess\(\)\)/);
 });
 
+test("destructive and publishing actions use an accessible application confirmation", async () => {
+  const readerHtml = await readFile(new URL("index.html", publicRoot), "utf8");
+  const adminHtml = await readFile(new URL("admin/index.html", publicRoot), "utf8");
+  const auth = await readFile(new URL("auth/auth-controller.js", publicRoot), "utf8");
+  const annotations = await readFile(new URL("annotations/annotation-panel.js", publicRoot), "utf8");
+  const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
+  assert.match(readerHtml, /id="confirmationDialog"/);
+  assert.match(adminHtml, /id="confirmationDialog"/);
+  for (const controller of [auth, annotations, admin]) {
+    assert.match(controller, /confirmUiAction/);
+    assert.doesNotMatch(controller, /(?:window\.)?confirm\(/);
+  }
+});
+
 test("async UI completions stay bound to their originating book, survey and annotation draft", async () => {
   const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
   const surveys = await readFile(new URL("surveys/survey-controller.js", publicRoot), "utf8");

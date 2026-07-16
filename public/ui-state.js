@@ -29,3 +29,15 @@ export function showUiToast(message, { error = false, duration = 3_200 } = {}) {
     toast.classList.remove("is-error");
   }, duration);
 }
+
+export function confirmUiAction(message, { dialog = globalThis.document?.querySelector("#confirmationDialog") } = {}) {
+  if (!dialog || dialog.open) return Promise.resolve(false);
+  const messageNode = dialog.querySelector("[data-confirmation-message]");
+  if (!messageNode) return Promise.resolve(false);
+  messageNode.textContent = message;
+  dialog.returnValue = "";
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    dialog.showModal();
+  });
+}

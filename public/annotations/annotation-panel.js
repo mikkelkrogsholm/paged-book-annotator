@@ -1,4 +1,4 @@
-import { closeSidePanel, openSidePanel, showUiToast } from "../ui-state.js";
+import { closeSidePanel, confirmUiAction, openSidePanel, showUiToast } from "../ui-state.js";
 
 const typeLabels = Object.freeze({
   text: "Tekst",
@@ -98,7 +98,7 @@ export class AnnotationPanel {
       if (action === "status") await this.runItemAction(button, () => this.callbacks.onUpdate?.(annotation.id, {
         status: annotation.status === "open" ? "resolved" : "open",
       }));
-      if (action === "delete" && window.confirm("Vil du slette denne kommentar?")) {
+      if (action === "delete" && await confirmUiAction("Vil du slette denne kommentar?")) {
         await this.runItemAction(button, () => this.callbacks.onDelete?.(annotation.id));
       }
     });

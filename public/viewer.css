@@ -159,6 +159,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
   box-shadow: 0 38px 120px rgba(0,0,0,0.55);
 }
 .auth-dialog::backdrop { background: rgba(8,9,7,0.72); backdrop-filter: blur(10px); }
+.confirmation-dialog { width: min(430px, calc(100vw - 28px)); padding: 26px; border: 1px solid rgba(255,255,255,0.12); border-radius: 16px; background: #20211d; color: var(--ink-light); box-shadow: 0 38px 120px rgba(0,0,0,0.55); }
+.confirmation-dialog::backdrop { background: rgba(8,9,7,0.72); backdrop-filter: blur(10px); }
+.confirmation-dialog h2 { margin: 0 0 10px; font-family: var(--serif); font-size: 30px; font-weight: 400; }
+.confirmation-dialog p { margin: 0; color: var(--muted); line-height: 1.55; }
+.confirmation-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+.confirmation-actions button { min-height: 40px; padding: 0 15px; border-radius: 8px; cursor: pointer; }
 .auth-dialog-close { position: absolute; top: 14px; right: 14px; }
 .auth-dialog-close button { width: 32px; height: 32px; border: 0; border-radius: 50%; background: rgba(255,255,255,0.06); font-size: 20px; cursor: pointer; }
 .auth-dialog header > span { color: var(--red-soft); font-size: 8px; font-weight: 650; letter-spacing: 0.14em; text-transform: uppercase; }

@@ -1,3 +1,5 @@
+import { confirmUiAction } from "../ui-state.js";
+
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
@@ -682,8 +684,8 @@ document.addEventListener("click", async (event) => {
   button.disabled = true;
   try {
     if (button.dataset.action === "select-book") await loadBook(button.closest("[data-book-id]").dataset.bookId);
-    if (button.dataset.action === "archive-book") { const bookId = button.closest("[data-book-id]").dataset.bookId; if (confirm("Arkivér bogen? Læsere mister adgang, men data bevares.")) { await api(`/api/admin/books/${encodeURIComponent(bookId)}`, { method: "DELETE" }); await refreshLibrary(); } }
-    if (button.dataset.action === "publish-revision") { if (confirm("Publicér denne validerede revision for alle læsere?")) { await api(`${bookPath("revisions", actionBookId)}/${encodeURIComponent(button.dataset.id)}/publish`, { method: "POST", json: {} }); await refreshLibrary(actionBookId); toast("Revisionen er publiceret atomisk."); } }
+    if (button.dataset.action === "archive-book") { const bookId = button.closest("[data-book-id]").dataset.bookId; if (await confirmUiAction("Arkivér bogen? Læsere mister adgang, men data bevares.")) { await api(`/api/admin/books/${encodeURIComponent(bookId)}`, { method: "DELETE" }); await refreshLibrary(); } }
+    if (button.dataset.action === "publish-revision") { if (await confirmUiAction("Publicér denne validerede revision for alle læsere?")) { await api(`${bookPath("revisions", actionBookId)}/${encodeURIComponent(button.dataset.id)}/publish`, { method: "POST", json: {} }); await refreshLibrary(actionBookId); toast("Revisionen er publiceret atomisk."); } }
     if (button.dataset.action === "save-user") {
       const row = button.closest("[data-user-id]");
       const bookRole = row.querySelector("[data-field=bookRole]").value;
@@ -729,16 +731,16 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.action === "copy-reader-link") await copyText(`${location.origin}${readerPath()}`);
     if (button.dataset.action === "copy-invitation-link") await copyText(state.invitationUrl);
-    if (button.dataset.action === "revoke-invite" && confirm("Tilbagekald invitationen? Linket stopper med at virke med det samme.")) { await api(`${bookPath("invitations")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderInvitations(list(await api(bookPath("invitations")), "invitations")); }
-    if (button.dataset.action === "revoke-code" && confirm("Tilbagekald adgangskoden? Den stopper med at virke med det samme.")) { await api(`${bookPath("access-codes")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); }
-    if (button.dataset.action === "revoke-token" && confirm("Tilbagekald tokenet? Agenter, der bruger det, mister adgang med det samme.")) { await api(`/api/admin/tokens/${encodeURIComponent(button.dataset.id)}?bookId=${encodeURIComponent(state.bookId)}`, { method: "DELETE" }); renderTokens(list(await api(bookPath("tokens")), "tokens")); }
+    if (button.dataset.action === "revoke-invite" && await confirmUiAction("Tilbagekald invitationen? Linket stopper med at virke med det samme.")) { await api(`${bookPath("invitations")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderInvitations(list(await api(bookPath("invitations")), "invitations")); }
+    if (button.dataset.action === "revoke-code" && await confirmUiAction("Tilbagekald adgangskoden? Den stopper med at virke med det samme.")) { await api(`${bookPath("access-codes")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); }
+    if (button.dataset.action === "revoke-token" && await confirmUiAction("Tilbagekald tokenet? Agenter, der bruger det, mister adgang med det samme.")) { await api(`/api/admin/tokens/${encodeURIComponent(button.dataset.id)}?bookId=${encodeURIComponent(state.bookId)}`, { method: "DELETE" }); renderTokens(list(await api(bookPath("tokens")), "tokens")); }
     if (button.dataset.action === "remove-survey-question") {
       if (document.querySelectorAll(".survey-question-editor").length <= 1) return toast("En survey skal have mindst ét spørgsmål.");
       button.closest(".survey-question-editor").remove();
     }
     if (button.dataset.action === "edit-survey") editSurvey(state.surveys.find((survey) => survey.id === button.dataset.id));
     if (button.dataset.action === "publish-survey") {
-      if (confirm("Publicér kladden for bogens aktive revision? Versionen kan ikke ændres bagefter.")) {
+      if (await confirmUiAction("Publicér kladden for bogens aktive revision? Versionen kan ikke ændres bagefter.")) {
         await api(`${bookPath("surveys")}/${encodeURIComponent(button.dataset.id)}/publish`, { method: "POST", json: {} });
         const [surveys, responses] = await Promise.all([api(bookPath("surveys")), api(bookPath("survey-responses"))]);
         renderSurveys(list(surveys, "surveys"), list(responses, "responses"));
@@ -746,7 +748,7 @@ document.addEventListener("click", async (event) => {
       }
     }
     if (button.dataset.action === "close-survey") {
-      if (confirm("Luk surveyen? Eksisterende svar bevares, men nye svar afvises.")) {
+      if (await confirmUiAction("Luk surveyen? Eksisterende svar bevares, men nye svar afvises.")) {
         await api(`${bookPath("surveys")}/${encodeURIComponent(button.dataset.id)}/close`, { method: "POST", json: {} });
         renderSurveys(list(await api(bookPath("surveys")), "surveys"), state.surveyResponses);
         toast("Surveyen er lukket.");

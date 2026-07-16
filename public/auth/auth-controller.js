@@ -1,4 +1,5 @@
 import { AuthClient } from "./auth-client.js";
+import { confirmUiAction } from "../ui-state.js";
 
 function formValue(form) {
   return Object.fromEntries(new FormData(form).entries());
@@ -74,7 +75,7 @@ export class AuthController {
       });
     });
     document.querySelector("#eraseAccountButton").addEventListener("click", async (event) => {
-      if (!window.confirm("Slet kontodata, læseprogression og adgang? Dine annotationer anonymiseres.")) return;
+      if (!await confirmUiAction("Slet kontodata, læseprogression og adgang? Dine annotationer anonymiseres.")) return;
       if (await this.runAccountAction(event.currentTarget, () => this.client.eraseAccount())) window.location.reload();
     });
   }

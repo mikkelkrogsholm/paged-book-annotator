@@ -257,6 +257,17 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+  <dialog class="confirmation-dialog" id="confirmationDialog" aria-labelledby="confirmationTitle">
+    <form method="dialog">
+      <h2 id="confirmationTitle">Bekræft handling</h2>
+      <p data-confirmation-message></p>
+      <div class="confirmation-actions">
+        <button class="secondary-button" type="submit" value="cancel" autofocus>Annullér</button>
+        <button class="primary-button" type="submit" value="confirm">Bekræft</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog class="auth-dialog" id="authDialog">
     <form method="dialog" class="auth-dialog-close"><button type="submit" aria-label="Luk">×</button></form>
     <header>
