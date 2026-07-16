@@ -55,7 +55,10 @@ export class BookContentIndex {
         element.onEndTag(() => { stack.pop(); });
       },
       text(text) {
-        if (stack.length > 0) stack.at(-1).textParts.push(text.text);
+        // A stable section anchor remains a valid target when its readable
+        // text lives in nested, independently anchored headings or paragraphs.
+        // Record text for every open anchored ancestor, not only the leaf.
+        for (const section of stack) section.textParts.push(text.text);
       },
     });
     await rewriter.transform(new Response(Bun.file(this.filePath))).text();
