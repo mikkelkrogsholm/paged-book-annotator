@@ -37,6 +37,33 @@ describe("BookCatalogRepository", () => {
     catalog.close();
   });
 
+  test("migrerer schema 1 og bevarer gamle URL-navne som reserverede aliases", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "pba-catalog-v1-"));
+    temporaryRoots.push(root);
+    const filePath = resolve(root, "catalog.sqlite");
+    const database = new Database(filePath, { create: true });
+    database.exec(`
+      CREATE TABLE books (
+        id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, subtitle TEXT, language TEXT,
+        status TEXT NOT NULL DEFAULT 'active', active_revision_id TEXT, created_by TEXT, archived_by TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT
+      );
+      INSERT INTO books (id, slug, title, created_at, updated_at)
+      VALUES ('book-one', 'foerste-link', 'Book One', '2026-07-15T12:00:00.000Z', '2026-07-15T12:00:00.000Z');
+      PRAGMA user_version = 1;
+    `);
+    database.close();
+
+    const catalog = new BookCatalogRepository({ filePath, clock: () => new Date("2026-07-16T12:00:00.000Z") });
+    const changed = catalog.updateBookSlug({ bookId: "book-one", slug: "nyt-link" });
+    expect(changed.slug).toBe("nyt-link");
+    expect(catalog.getBookBySlug("foerste-link")).toMatchObject({ alias: true, book: { id: "book-one", slug: "nyt-link" } });
+    expect(catalog.getBookBySlug("nyt-link")).toMatchObject({ alias: false, book: { id: "book-one" } });
+    expect(() => catalog.createBook({ id: "book-two", slug: "foerste-link", title: "Book Two" })).toThrow("allerede i brug");
+    expect(catalog.database.query("PRAGMA user_version").get().user_version).toBe(BOOK_CATALOG_SCHEMA_VERSION);
+    catalog.close();
+  });
+
   test("afviser databaser fra et nyere schema", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "pba-catalog-newer-"));
     temporaryRoots.push(root);

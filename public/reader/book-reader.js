@@ -25,6 +25,7 @@ export class BookReader extends EventTarget {
     this.zoom = 1;
     this.single = this.mobileQuery.matches;
     this.ready = false;
+    this.preparePromise = null;
     this.readerCssPromise = fetch("/book-frame.css").then((response) => {
       if (!response.ok) throw new Error(`Kunne ikke hente bogrammens typografi (${response.status}).`);
       return response.text();
@@ -33,23 +34,39 @@ export class BookReader extends EventTarget {
 
   async start() {
     this.bindViewerControls();
-    const loaded = new Promise((resolveLoad, rejectLoad) => {
+    return new Promise((resolveLoad, rejectLoad) => {
       const timeout = window.setTimeout(
-        () => rejectLoad(new Error(`Bogen blev ikke pagineret inden for ${Math.ceil(this.paginationTimeoutMs / 1000)} sekunder.`)),
+        () => rejectLoad(new Error(`Den klargjorte bog blev ikke åbnet inden for ${Math.ceil(this.paginationTimeoutMs / 1000)} sekunder.`)),
         this.paginationTimeoutMs + 5_000,
       );
-      this.frame.addEventListener("load", () => {
-        this.prepareBook().then(() => {
+      const finish = () => {
+        this.frame.removeEventListener("load", finish);
+        this.preparePromise ??= this.prepareBook();
+        this.preparePromise.then(() => {
           window.clearTimeout(timeout);
           resolveLoad();
-        }, rejectLoad);
-      }, { once: true });
+        }, (error) => {
+          window.clearTimeout(timeout);
+          rejectLoad(error);
+        });
+      };
+      this.frame.addEventListener("load", finish, { once: true });
+      if (this.hasPreparedPages()) queueMicrotask(finish);
+      const current = this.frame.getAttribute("src");
+      if (!current || new URL(current, window.location.href).href !== new URL(this.bookUrl, window.location.href).href) {
+        this.frame.src = this.bookUrl;
+      }
     });
-    this.frame.src = this.bookUrl;
-    return loaded;
   }
 
-  async waitForPagination() {
+  hasPreparedPages() {
+    const document = this.frame.contentDocument;
+    if (!document?.body) return false;
+    return Boolean(document.querySelector(".pagedjs_page")
+      && (document.documentElement.dataset.pagedComplete === "true" || document.body.dataset.prePaginated === "true"));
+  }
+
+  async waitForPreparedPages() {
     const startedAt = Date.now();
     while (Date.now() - startedAt < this.paginationTimeoutMs) {
       const document = this.frame.contentDocument;
@@ -59,11 +76,11 @@ export class BookReader extends EventTarget {
       }
       await new Promise((resolveWait) => window.setTimeout(resolveWait, 80));
     }
-    throw new Error("Bogens sider blev ikke færdige.");
+    throw new Error("Bogbundlet indeholder ikke klargjorte sider.");
   }
 
   async prepareBook() {
-    const pages = await this.waitForPagination();
+    const pages = await this.waitForPreparedPages();
     const document = this.frame.contentDocument;
     const firstRect = pages[0].getBoundingClientRect();
     this.document = document;
@@ -95,6 +112,9 @@ export class BookReader extends EventTarget {
     const renderStatus = window.document.querySelector("#renderStatus");
     renderStatus.classList.add("is-ready");
     renderStatus.querySelector("span").textContent = this.single ? "Enkeltside" : "Opslag klar";
+    window.document.documentElement.dataset.readerReady = "true";
+    window.document.documentElement.dataset.readerReadyMs = String(Math.round(window.performance.now()));
+    window.performance.mark?.("pba-reader-ready");
     this.dispatchEvent(new CustomEvent("ready", { detail: { pages: this.pages.length } }));
   }
 

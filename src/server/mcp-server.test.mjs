@@ -145,12 +145,16 @@ test("multi-book MCP validates explicit book context and keeps bundle bytes out 
   const calls = [];
   const logRecords = [];
   const books = [
-    { id: "book-a", title: "Bog A", status: "active", activeRevisionId: "rev-a1" },
-    { id: "book-b", title: "Bog B", status: "draft", activeRevisionId: null },
+    { id: "book-a", slug: "book-a", title: "Bog A", status: "active", activeRevisionId: "rev-a1" },
+    { id: "book-b", slug: "book-b", title: "Bog B", status: "draft", activeRevisionId: null },
   ];
   const service = {
     listBooks: async () => ({ books }),
     getBook: async (_principal, bookId) => books.find((book) => book.id === bookId),
+    updateBook: async (_principal, bookId, input) => {
+      calls.push(["updateBook", bookId, input]);
+      return { ...books.find((book) => book.id === bookId), slug: input.slug };
+    },
     sessionForBook: (_principal, bookId) => ({ bookId, permissions: ["book:read"] }),
     listAnnotations: async (_principal, bookId) => ({ schemaVersion: 3, bookId, annotations: [] }),
     getProgress: async (_principal, bookId) => ({ bookId, anchorId: null }),
@@ -208,6 +212,8 @@ test("multi-book MCP validates explicit book context and keeps bundle bytes out 
     const managedBook = await client.callTool({ name: "get_book", arguments: { bookId: "book-a" } });
     assert.equal(managedBook.isError, undefined, JSON.stringify(managedBook));
     assert.equal(managedBook.structuredContent.book.status, "active");
+    const renamed = await client.callTool({ name: "update_book", arguments: { bookId: "book-a", slug: "mit-boglink" } });
+    assert.equal(renamed.structuredContent.book.slug, "mit-boglink");
     const missingBook = await client.callTool({ name: "list_annotations", arguments: {} });
     assert.equal(missingBook.isError, true);
     const upload = await client.callTool({ name: "create_book_upload", arguments: {
@@ -220,6 +226,7 @@ test("multi-book MCP validates explicit book context and keeps bundle bytes out 
     const republished = await client.callTool({ name: "publish_book_revision", arguments: { bookId: "book-b", revisionId: "rev-b1" } });
     assert.equal(republished.isError, undefined, JSON.stringify(republished));
     assert.deepEqual(calls, [
+      ["updateBook", "book-a", { slug: "mit-boglink" }],
       ["createBookUpload", "book-b", { filename: "manuscript.tar.gz", contentType: "application/gzip", sizeBytes: 512 }],
       ["validateBookUpload", "book-b", "upload-1"],
       ["publishBookRevision", "book-b", "rev-b1"],

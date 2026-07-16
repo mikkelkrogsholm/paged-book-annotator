@@ -29,7 +29,7 @@
         <div class="section-heading"><div><span>Administreret indhold</span><h2>Bibliotek</h2></div><p>Hver bog har egne revisioner, læsere, adgangsregler og agenttokens.</p></div>
         <form class="inline-form create-book-form" id="createBookForm">
           <input name="title" placeholder="Titel" aria-label="Titel" required maxlength="200">
-          <input name="slug" placeholder="URL-navn (valgfrit)" aria-label="URL-navn (valgfrit)" pattern="[a-z0-9]+(?:-[a-z0-9]+)*">
+          <label class="book-link-field"><span>Boglink</span><span class="book-link-input"><code>/books/</code><input name="slug" placeholder="min-bog" aria-label="Boglinkets URL-navn" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required maxlength="96"></span></label>
           <input name="subtitle" placeholder="Undertitel" aria-label="Undertitel">
           <input name="language" value="da" placeholder="Sprog" aria-label="Sprog">
           <button type="submit">Opret bog</button>
@@ -65,7 +65,7 @@
               <p class="field-help">Ændringen træder i kraft med det samme for den valgte bog.</p>
               <dl class="capability-preview" id="capabilityPreview"></dl><p class="form-error" id="accessError" role="alert" hidden></p><button type="submit">Gem bogens adgang</button>
             </form>
-            <div class="share-links"><span>Direkte boglink</span><h3>Læs eller log ind</h3><p>Linket følger altid den aktive adgangsprofil.</p><div class="copy-row"><code id="readerUrl"></code><button class="secondary" type="button" data-action="copy-reader-link">Kopiér</button></div><p class="share-warning" id="shareWarning"></p></div>
+            <div class="share-links"><span>Direkte boglink</span><h3>Læs eller log ind</h3><p>Linket følger altid den aktive adgangsprofil. Du kan ændre URL-navnet; gamle delte links viderestilles permanent.</p><form class="settings-form" id="bookLinkForm"><label for="bookSlug">Redigér URL-navn</label><div class="book-link-input"><code>/books/</code><input id="bookSlug" name="slug" aria-label="Boglinkets URL-navn" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required maxlength="96"></div><button type="submit">Gem boglink</button></form><div class="copy-row"><code id="readerUrl"></code><button class="secondary" type="button" data-action="copy-reader-link">Kopiér</button></div><p class="share-warning" id="shareWarning"></p></div>
           </div>
         </section>
 

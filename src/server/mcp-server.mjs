@@ -303,6 +303,16 @@ function registerLibraryTools(server, adapter) {
     annotations: ADDITIVE,
   }, async (input) => result({ book: await adapter.catalog("createBook", input) }));
 
+  server.registerTool("update_book", {
+    title: "Update book link",
+    description: "Change the canonical public URL slug for a book. Historical slugs continue as permanent redirects.",
+    inputSchema: {
+      bookId: bookIdSchema,
+      slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    },
+    annotations: IDEMPOTENT_WRITE,
+  }, async ({ bookId, slug }) => result({ book: await adapter.catalog("updateBook", bookId, { slug }) }));
+
   server.registerTool("create_book_upload", {
     title: "Create book upload",
     description: "Create a staged tar.gz upload and return a short-lived HTTP PUT URL. Do not put bundle bytes or base64 in MCP arguments.",

@@ -105,7 +105,7 @@ UI-bekvemmeligheder som lokal filtrering, fokus og kopiering ændrer ingen data 
 er derfor ikke selvstændige tools. Bundlebytes sendes til den kortlivede `PUT`-URL
 fra `create_book_upload`; de placeres aldrig i MCP-argumenter.
 
-Alle 51 tools nedenfor findes i `tools/list`; intet tool må registreres uden en
+Alle 52 tools nedenfor findes i `tools/list`; intet tool må registreres uden en
 kontrakt og et outputskema. Permissionkolonnen viser minimumskravet. Nogle
 handlinger kræver yderligere ejerskab eller permission, fx moderation af en
 andens annotation og `progress:read:all` ved review-eksport med progression.
@@ -113,7 +113,7 @@ andens annotation og `progress:read:all` ved review-eksport med progression.
 | Workflow | Tools | Minimumpermission |
 | --- | --- | --- |
 | Start | `list_books`, `get_book` | `books:read` |
-| Bogoprettelse | `create_book` | instansadministrator |
+| Bogoprettelse og link | `create_book`, `update_book` | instansadministrator / `books:settings` |
 | Upload | `create_book_upload`, `validate_book_upload` | `books:upload` |
 | Revisioner | `list_book_revisions`, `publish_book_revision`, `archive_book` | hhv. `books:read`, `books:publish`, `books:settings` |
 | Bogtekst | `get_book_context`, `list_book_outline`, `get_book_section`, `search_book` | `books:read` |
@@ -188,7 +188,9 @@ konfigurerede datamappe.
 1. Læs bundlekontrakten og manifestskemaet.
 2. Generér lokalt med `bun run bundle init`, validér med `bundle validate
    --json`, og pak med `bundle pack`.
-3. Kald `create_book` hvis bogposten ikke findes.
+3. Kald `create_book` med det ønskede `slug`, hvis bogposten ikke findes. Brug
+   senere `update_book`, hvis det offentlige `/books/<slug>`-link skal ændres;
+   tidligere slugs fortsætter som permanente redirects.
 4. Kald `create_book_upload` med `.tar.gz`-filnavn og content type.
 5. Opløs det relative `uploadUrl` mod den kørende PBA HTTP-servers origin,
    og HTTP `PUT` filen dertil med samme `Authorization: Bearer pba_...` som

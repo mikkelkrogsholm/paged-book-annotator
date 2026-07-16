@@ -39,6 +39,9 @@ bogens `active_revision_id` i én SQLite-transaktion.
 
 - `createBook()`, `getBook()`, `listBooks()` og `archiveBook()` administrerer
   katalogposten.
+- `updateBookSlug()` skifter det canonical offentlige URL-navn. Det tidligere
+  navn gemmes i `book_slug_aliases`, forbliver reserveret og kan opløses til
+  samme stabile bog-id.
 - `uploadRevision({ bookId, archivePath })` accepterer et gzip-komprimeret
   tar-arkiv og returnerer en `ready` revision.
 - `importRevisionFromDirectory()` kopierer en allerede validerbar bogmappe ind

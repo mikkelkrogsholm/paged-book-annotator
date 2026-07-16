@@ -132,7 +132,9 @@ export class LibraryApplication {
   resolveBookId(value, { includeArchived = false } = {}) {
     const requested = String(value ?? "");
     const byId = this.catalog.getBook(requested);
-    const book = byId ?? this.catalog.listBooks({ includeArchived }).find((item) => item.slug === requested);
+    let bySlug = null;
+    try { bySlug = this.catalog.getBookBySlug(requested)?.book ?? null; } catch {}
+    const book = byId ?? bySlug;
     if (!book) throw new ApplicationError(404, "Bogen findes ikke.", "book_not_found");
     if (book.status === "archived" && !includeArchived) {
       throw new ApplicationError(410, "Bogen er arkiveret.", "book_archived");
@@ -310,6 +312,22 @@ export class LibraryApplication {
     this.collaboration.saveAccessPolicy(this.config.access, actorId(principal), book.id);
     if (principal?.kind === "user") this.collaboration.setMembership(principal.id, "book_admin", { bookId: book.id });
     this.collaboration.audit({ principal, action: "book.create", resourceType: "book", resourceId: book.id, bookId: book.id });
+    return book;
+  }
+
+  updateBook(principal, bookId, input) {
+    this.assertBookPermission(principal, "books:settings", bookId);
+    const previous = this.bookContext(bookId).book;
+    const nextSlug = slug(input.slug);
+    const book = this.catalog.updateBookSlug({ bookId: previous.id, slug: nextSlug });
+    this.collaboration.audit({
+      principal,
+      action: "book.update",
+      resourceType: "book",
+      resourceId: book.id,
+      bookId: book.id,
+      details: { previousSlug: previous.slug, slug: book.slug },
+    });
     return book;
   }
 

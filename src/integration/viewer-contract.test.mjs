@@ -91,6 +91,10 @@ test("an empty managed library remains an interactive authentication state", asy
   assert.ok(adminHtml.indexOf('id="tokens"') < adminHtml.indexOf('id="bookWorkspace"'));
   assert.match(adminHtml, /href="#tokens">MCP-tokens/);
   assert.match(adminHtml, /instansadministrator-token kræver ingen bog/i);
+  assert.match(adminHtml, /id="bookLinkForm"/);
+  assert.match(adminHtml, /name="slug"[^>]+required/);
+  assert.match(admin, /method: "PATCH"/);
+  assert.match(admin, /Gamle links viderestilles fortsat/);
   assert.match(admin, /function updateBookNavigationAvailability\(\)/);
   assert.match(admin, /function tokenListPath\(\)/);
   assert.match(admin, /state\.bookId \? `\/api\/admin\/metadata\?bookId=/);
@@ -160,6 +164,19 @@ test("viewer navigation is generic and resolves destinations against Paged.js pa
   assert.doesNotMatch(controller, /Hávamál|stanza|vers-/i);
   assert.match(reader, /querySelectorAll\("\.pagedjs_page"\)/);
   assert.match(reader, /goToTarget/);
+  assert.match(reader, /hasPreparedPages\(\)/);
+  assert.match(reader, /dataset\.readerReady = "true"/);
+  assert.doesNotMatch(reader, /this\.frame\.src = this\.bookUrl;\s*return loaded/);
+});
+
+test("managed reader shell can bootstrap an eager pre-paginated revision", async () => {
+  const html = await readFile(new URL("index.html", publicRoot), "utf8");
+  const main = await readFile(new URL("main.js", publicRoot), "utf8");
+  assert.match(html, /PBA_VIEWER_BOOTSTRAP/);
+  assert.match(html, /data-eager-book-url/);
+  assert.doesNotMatch(html, /Sætter siderne/);
+  assert.match(main, /#viewerBootstrap/);
+  assert.match(main, /JSON\.parse\(bootstrap\.textContent\)/);
 });
 
 test("example book fulfills the page and stable-anchor contract", async () => {

@@ -18,6 +18,7 @@ export { loadBookViewerConfig } from "./src/server/viewer-config.mjs";
 
 const repositoryRoot = fileURLToPath(new URL(".", import.meta.url));
 const publicRoot = resolve(repositoryRoot, "public");
+const viewerHtmlTemplate = Bun.file(join(publicRoot, "index.html")).text();
 const runtimeFontFiles = new Map([
   ["/runtime/fonts/source-serif-4-latin-ext-400-normal.woff2", resolve(repositoryRoot, "node_modules/@fontsource/source-serif-4/files/source-serif-4-latin-ext-400-normal.woff2")],
   ["/runtime/fonts/source-serif-4-latin-ext-400-italic.woff2", resolve(repositoryRoot, "node_modules/@fontsource/source-serif-4/files/source-serif-4-latin-ext-400-italic.woff2")],
@@ -142,6 +143,7 @@ function errorMetadata(error) {
 
 function normalizedRequestPath(pathname, config) {
   if (pathname.startsWith("/book/")) return "/book/*";
+  if (/^\/books\/[^/]+\/revisions\/[^/]+\/assets\//.test(pathname)) return "/books/:bookId/revisions/:revisionId/assets/*";
   if (/^\/books\/[^/]+\/assets\//.test(pathname)) return "/books/:bookId/assets/*";
   if (/^\/books\/[^/]+\/?$/.test(pathname)) return "/books/:bookId";
   if (pathname === config.mcp.endpoint) return config.mcp.endpoint;
@@ -221,7 +223,7 @@ async function readJson(request) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-async function staticFileResponse(root, requestPath, { headOnly = false } = {}) {
+async function staticFileResponse(root, requestPath, { headOnly = false, cacheControl = "no-cache" } = {}) {
   const candidate = resolve(root, `.${requestPath}`);
   if (!isPathInside(root, candidate)) return null;
   let fileStats;
@@ -230,12 +232,15 @@ async function staticFileResponse(root, requestPath, { headOnly = false } = {}) 
   const file = Bun.file(candidate);
   return new Response(headOnly ? null : file, { status: 200, headers: {
     "Content-Type": mimeTypes.get(extname(candidate).toLowerCase()) ?? file.type ?? "application/octet-stream",
-    "Content-Length": String(fileStats.size), "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff",
+    "Content-Length": String(fileStats.size), "Cache-Control": cacheControl, "X-Content-Type-Options": "nosniff",
   } });
 }
 
 function publicConfig(config, service, principal, { managed = false } = {}) {
-  const assetRoot = managed ? `/books/${encodeURIComponent(config.book.id)}/assets` : "/book";
+  const revisionId = config.book.revisionId ?? "legacy";
+  const assetRoot = managed
+    ? `/books/${encodeURIComponent(config.book.id)}/revisions/${encodeURIComponent(revisionId)}/assets`
+    : "/book";
   return {
     schemaVersion: 2,
     annotationSchemaVersion: ANNOTATION_SCHEMA_VERSION,
@@ -244,12 +249,35 @@ function publicConfig(config, service, principal, { managed = false } = {}) {
       id: config.book.id, title: config.book.title, subtitle: config.book.subtitle, mark: config.book.mark,
       language: config.book.language, documentUrl: `${assetRoot}/${encodeURI(config.book.document)}`,
       navigationUrl: config.book.navigation ? `${assetRoot}/${encodeURI(config.book.navigation)}` : "",
-      paginationTimeoutMs: config.book.paginationTimeoutMs, buildId: config.book.buildId, revisionId: config.book.revisionId ?? "legacy",
+      paginationTimeoutMs: config.book.paginationTimeoutMs, buildId: config.book.buildId, revisionId,
     },
     access: { ...service.policy },
     session: service.session(principal),
     features: { textAnnotations: true, elementAnnotations: true, pageAnnotations: true, importExport: true, admin: true, mcp: config.mcp.enabled },
   };
+}
+
+function safeEmbeddedJson(value) {
+  return JSON.stringify(value).replace(/[<>&]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+function htmlAttribute(value) {
+  return String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+async function managedViewerResponse(config, service, principal, { headOnly = false } = {}) {
+  const bootstrap = publicConfig(config, service, principal, { managed: true });
+  const canRead = bootstrap.session.capabilities.canRead && Boolean(config.book.document);
+  const eagerAttribute = canRead ? `src="${htmlAttribute(bootstrap.book.documentUrl)}" loading="eager"` : "";
+  const html = (await viewerHtmlTemplate)
+    .replace("<!--PBA_VIEWER_BOOTSTRAP-->", `<script id="viewerBootstrap" type="application/json">${safeEmbeddedJson(bootstrap)}</script>`)
+    .replace('data-eager-book-url=""', eagerAttribute);
+  return new Response(headOnly ? null : html, { status: 200, headers: {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": String(new TextEncoder().encode(html).byteLength),
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  } });
 }
 
 async function apiResponse(request, pathname, url, context, service, config, { platform = null, managed = false } = {}) {
@@ -462,6 +490,9 @@ async function libraryAdminResponse(request, pathname, url, context, platform, c
       session: platform.sessionForBook(principal, bookId),
     });
   }
+  if (!tail && request.method === "PATCH") {
+    return jsonResponse(200, { book: platform.updateBook(principal, bookId, await readJson(request)) });
+  }
   if (!tail && request.method === "DELETE") return jsonResponse(200, { book: platform.archiveBook(principal, bookId) });
   if (tail === "overview" && request.method === "GET") {
     const members = platform.listMembers(principal, bookId);
@@ -577,6 +608,7 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
   const managedApiMatch = platform && pathname.match(/^\/api\/books\/([^/]+)(\/.*)?$/);
   const managedReaderMatch = platform && pathname.match(/^\/books\/([^/]+)(?:\/|$)/);
   const managedAdminMatch = platform && pathname.match(/^\/api\/admin\/books\/([^/]+)(?:\/|$)/);
+  const isManagedReader = Boolean(platform && /^\/books\/[^/]+\/?$/.test(pathname));
   if (managedApiMatch) {
     managedBookId = platform.resolveBookId(managedApiMatch[1]);
     const book = platform.bookContext(managedBookId);
@@ -592,6 +624,16 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
   const context = await requestContext(request, platform ?? activeService, { bookId: requestBookId || platform?.defaultBookId });
   state.principalKind = principalKind(context.principal);
   rateLimiter?.assert({ address: clientAddress, pathname, method: request.method, principalKind: state.principalKind });
+
+  if (isManagedReader) {
+    const book = platform.bookContext(requestBookId).book;
+    const requestedSlug = decodeURIComponent(managedReaderMatch[1]);
+    if (requestedSlug !== book.slug) {
+      const canonical = new URL(`/books/${encodeURIComponent(book.slug)}`, request.url);
+      canonical.search = url.search;
+      return withContextCookie(Response.redirect(canonical, 308), context, config);
+    }
+  }
 
   if (platform && pathname.startsWith("/api/admin/")) {
     const response = await libraryAdminResponse(request, pathname, url, context, platform, config);
@@ -620,6 +662,23 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
   }
 
   const readsStaticFile = request.method === "GET" || request.method === "HEAD";
+  const managedRevisionAssetMatch = platform && pathname.match(/^\/books\/([^/]+)\/revisions\/([^/]+)\/assets\/(.+)$/);
+  if (readsStaticFile && managedRevisionAssetMatch) {
+    const bookId = platform.resolveBookId(managedRevisionAssetMatch[1]);
+    const book = platform.bookContext(bookId);
+    if (!book.revision || book.revision.id !== managedRevisionAssetMatch[2]) {
+      throw new ApplicationError(404, "Bogrevisionen findes ikke eller er ikke aktiv.", "revision_not_found");
+    }
+    platform.serviceForBook(bookId).assertCanRead(platform.principalForBook(context.principal, bookId));
+    const response = await staticFileResponse(book.config.book.sourceDir, `/${managedRevisionAssetMatch[3]}`, {
+      headOnly: request.method === "HEAD",
+      cacheControl: "private, max-age=31536000, immutable",
+    });
+    if (response) {
+      response.headers.set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; base-uri 'none'; frame-src 'none';");
+      return withContextCookie(response, context, config);
+    }
+  }
   const managedAssetMatch = platform && pathname.match(/^\/books\/([^/]+)\/assets\/(.+)$/);
   if (readsStaticFile && managedAssetMatch) {
     const bookId = platform.resolveBookId(managedAssetMatch[1]);
@@ -656,7 +715,15 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
     }
   }
   if (readsStaticFile) {
-    const isManagedReader = platform && /^\/books\/[^/]+\/?$/.test(pathname);
+    if (isManagedReader) {
+      const book = platform.bookContext(requestBookId);
+      return withContextCookie(await managedViewerResponse(
+        book.config,
+        platform.serviceForBook(requestBookId),
+        platform.principalForBook(context.principal, requestBookId),
+        { headOnly: request.method === "HEAD" },
+      ), context, config);
+    }
     const viewerPath = pathname === "/" || pathname === "/preview.html" || isManagedReader ? "/index.html" : pathname === "/admin" || pathname === "/admin/" ? "/admin/index.html" : pathname;
     const response = await staticFileResponse(publicRoot, viewerPath, { headOnly: request.method === "HEAD" });
     if (response) return withContextCookie(response, context, config);

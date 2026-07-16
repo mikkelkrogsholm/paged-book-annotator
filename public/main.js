@@ -14,6 +14,8 @@ const routeBookId = bookRoute ? decodeURIComponent(bookRoute[1]) : "";
 const apiBase = routeBookId ? `/api/books/${encodeURIComponent(routeBookId)}` : "/api";
 
 async function fetchConfig() {
+  const bootstrap = document.querySelector("#viewerBootstrap");
+  if (bootstrap) return JSON.parse(bootstrap.textContent);
   const response = await fetch(`${apiBase}/config`, { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`Kunne ikke hente viewer-konfigurationen (${response.status}).`);
   return response.json();

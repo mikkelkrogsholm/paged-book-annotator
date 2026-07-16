@@ -99,6 +99,12 @@ td select { height: 32px; font-size: 11px; }
 .book-card .row-actions { margin-top: auto; }
 .empty-library { padding: 32px; border: 1px dashed var(--line); color: var(--muted); text-align: center; }
 .create-book-form { grid-template-columns: 1.2fr 1fr 1.2fr .5fr auto; }
+.book-link-field { display: grid; gap: 6px; min-width: 0; }
+.book-link-field > span:first-child { color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.book-link-input { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: flex; min-width: 0; }
+.book-link-input code { color: var(--muted); padding-left: 11px; white-space: nowrap; }
+.book-link-input input { background: transparent; border: 0; min-width: 0; width: 100%; }
+.book-link-input input:focus { box-shadow: none; outline: 2px solid var(--accent); outline-offset: 1px; }
 .profile-form { display: grid; grid-template-columns: repeat(4,minmax(130px,1fr)); gap: 8px; margin-bottom: 18px; }
 .profile-form button { grid-column: -2 / -1; }
 .invite-form { grid-template-columns: 1fr 1.3fr .8fr .6fr auto; }

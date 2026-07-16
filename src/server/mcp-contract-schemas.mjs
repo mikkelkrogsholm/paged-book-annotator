@@ -203,6 +203,7 @@ export const surveyResponseSchema = z.looseObject({
 
 const bookSchema = z.looseObject({
   id: nonEmptyString,
+  slug: nonEmptyString.optional(),
   title: z.string().optional(),
   status: z.enum(["draft", "active", "published", "archived"]).optional(),
   activeRevisionId: z.string().nullable().optional(),
@@ -336,6 +337,7 @@ export const MCP_TOOL_OUTPUT_SCHEMAS = Object.freeze({
   list_books: toolOutput(z.object({ items: z.array(bookSchema) })),
   get_book: toolOutput(z.object({ book: bookSchema, session: sessionSchema })),
   create_book: toolOutput(z.object({ book: bookSchema })),
+  update_book: toolOutput(z.object({ book: bookSchema })),
   create_book_upload: toolOutput(z.object({ upload: uploadSchema })),
   validate_book_upload: toolOutput(z.object({ revision: revisionSchema })),
   list_book_revisions: toolOutput(z.object({ items: z.array(revisionSchema) })),

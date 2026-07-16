@@ -31,6 +31,10 @@ function formObject(form) {
 function list(payload, key) { return Array.isArray(payload) ? payload : Array.isArray(payload?.[key]) ? payload[key] : Array.isArray(payload?.items) ? payload.items : []; }
 function bookPath(segment = "", bookId = state.bookId) { return `/api/admin/books/${encodeURIComponent(bookId)}${segment ? `/${segment}` : ""}`; }
 function readerPath(book = state.book) { return `/books/${encodeURIComponent(book?.slug ?? book?.id ?? state.bookId)}`; }
+function suggestedSlug(value) {
+  return String(value ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+}
 function tokenListPath() { return isInstanceAdmin() ? "/api/admin/tokens" : bookPath("tokens"); }
 function tokenRevokePath(id) {
   const path = `/api/admin/tokens/${encodeURIComponent(id)}`;
@@ -151,7 +155,7 @@ function setSectionVisible(id, visible) {
 function applyPermissionVisibility() {
   setSectionVisible("overview", can("users:read") && can("annotations:read:all"));
   setSectionVisible("revisions", can("books:upload") || can("books:publish"));
-  setSectionVisible("sharing", can("access:manage"));
+  setSectionVisible("sharing", can("access:manage") || can("books:settings"));
   setSectionVisible("users", can("users:read"));
   setSectionVisible("invitations", can("users:read") || can("users:invite"));
   setSectionVisible("access-codes", can("users:read") || can("users:invite"));
@@ -163,6 +167,8 @@ function applyPermissionVisibility() {
   document.querySelector("#createBookForm").hidden = !isInstanceAdmin();
   document.querySelector("#createUserForm").hidden = !isInstanceAdmin();
   document.querySelector("#uploadForm").hidden = !can("books:upload");
+  document.querySelector("#accessForm").hidden = !can("access:manage");
+  document.querySelector("#bookLinkForm").hidden = !can("books:settings");
   document.querySelector("#inviteForm").hidden = !can("users:invite");
   document.querySelector("#invitationsTable").closest(".table-wrap").hidden = !can("users:read");
   document.querySelector("#accessCodeForm").hidden = !can("users:invite");
@@ -479,6 +485,7 @@ async function loadBook(bookId) {
     document.querySelector("#bookMark").textContent = String(state.book.title ?? "B").slice(0, 2).toUpperCase();
     document.querySelector("#readerLink").href = readerPath();
     document.querySelector("#readerUrl").textContent = `${location.origin}${readerPath()}`;
+    document.querySelector("#bookSlug").value = state.book.slug ?? "";
     for (const link of document.querySelectorAll("[data-export-format]")) link.href = `${path("annotations/export")}?format=${link.dataset.exportFormat}`;
     document.querySelector("#reviewExportLink").href = path("review-export");
 
@@ -555,7 +562,30 @@ document.querySelector("#createBookForm").addEventListener("submit", async (even
   event.preventDefault();
   const form = event.currentTarget;
   setFormBusy(form, true);
-  try { const payload = await api("/api/admin/books", { method: "POST", json: formObject(form) }); form.reset(); await refreshLibrary(payload.book?.id); toast("Bogen er oprettet som kladde."); } catch (error) { toast(error.message); }
+  try { const payload = await api("/api/admin/books", { method: "POST", json: formObject(form) }); form.reset(); form.slug.dataset.edited = "false"; await refreshLibrary(payload.book?.id); toast("Bogen er oprettet som kladde."); } catch (error) { toast(error.message); }
+  finally { setFormBusy(form, false); }
+});
+const createBookTitle = document.querySelector("#createBookForm [name=title]");
+const createBookSlug = document.querySelector("#createBookForm [name=slug]");
+createBookTitle.addEventListener("input", () => {
+  if (createBookSlug.dataset.edited !== "true") createBookSlug.value = suggestedSlug(createBookTitle.value);
+});
+createBookSlug.addEventListener("input", () => { createBookSlug.dataset.edited = "true"; });
+document.querySelector("#bookLinkForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const bookId = state.bookId;
+  setFormBusy(form, true);
+  try {
+    const payload = await api(bookPath("", bookId), { method: "PATCH", json: formObject(form) });
+    if (state.bookId !== bookId) return;
+    state.book = payload.book ?? payload;
+    state.books = state.books.map((book) => book.id === bookId ? { ...book, ...state.book } : book);
+    renderBooks();
+    document.querySelector("#readerLink").href = readerPath();
+    document.querySelector("#readerUrl").textContent = `${location.origin}${readerPath()}`;
+    toast("Boglinket er opdateret. Gamle links viderestilles fortsat.");
+  } catch (error) { toast(error.message); }
   finally { setFormBusy(form, false); }
 });
 document.querySelector("#uploadForm").addEventListener("submit", async (event) => {

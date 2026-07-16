@@ -10,7 +10,8 @@ const STANDARD_ERRORS = Object.freeze([
 const definitions = [
   ["list_books", ["books:read"], "Find tilgængelige bøger og deres stabile id'er.", {}, "start", "read"],
   ["get_book", ["books:read"], "Læs metadata for én bog.", { bookId: "book-id" }, "start", "read"],
-  ["create_book", [], "Opret en tom bogpost før upload; kræver instansadministrator.", { title: "Min bog", language: "da" }, "book-upload", "create"],
+  ["create_book", [], "Opret en tom bogpost med et eksplicit offentligt URL-navn før upload; kræver instansadministrator.", { title: "Min bog", slug: "min-bog", language: "da" }, "book-upload", "create"],
+  ["update_book", ["books:settings"], "Skift bogens offentlige URL-navn; tidligere links bevares som permanente redirects.", { bookId: "book-id", slug: "nyt-boglink" }, "book-lifecycle", "update"],
   ["create_book_upload", ["books:upload"], "Opret en kortlivet upload-URL til en valideret tar.gz-bundle.", { bookId: "book-id", filename: "book.tar.gz", contentType: "application/gzip" }, "book-upload", "create"],
   ["validate_book_upload", ["books:upload"], "Validér en færdig upload og opret en immutable staged revision.", { bookId: "book-id", uploadId: "upload-id" }, "book-upload", "update"],
   ["list_book_revisions", ["books:read"], "List revisioner og deres lifecycle-status.", { bookId: "book-id" }, "book-upload", "read"],
@@ -85,7 +86,7 @@ export const ADMIN_UI_MCP_PARITY = Object.freeze({
   contractVersion: 1,
   guarantee: "Hver vedvarende UI-funktion har en MCP-ækvivalent med samme application-service-autorisation og effekt.",
   areas: Object.freeze([
-    { uiArea: "Bibliotek og revisioner", tools: ["list_books", "get_book", "create_book", "create_book_upload", "validate_book_upload", "list_book_revisions", "publish_book_revision", "archive_book"] },
+    { uiArea: "Bibliotek og revisioner", tools: ["list_books", "get_book", "create_book", "update_book", "create_book_upload", "validate_book_upload", "list_book_revisions", "publish_book_revision", "archive_book"] },
     { uiArea: "Læsning og navigation", tools: ["get_book_context", "list_book_outline", "get_book_section", "search_book"] },
     { uiArea: "Annotationer", tools: ["get_annotation_context", "list_changes_since", "list_annotations", "create_annotation", "update_annotation", "delete_annotation", "export_annotations", "import_annotations"] },
     { uiArea: "Læseprogression", tools: ["get_reading_progress", "record_reading_progress", "list_reader_progress"] },
@@ -97,7 +98,7 @@ export const ADMIN_UI_MCP_PARITY = Object.freeze({
 });
 
 const outputKeysByName = Object.freeze({
-  list_books: ["items"], get_book: ["book", "session"], create_book: ["book"], create_book_upload: ["upload"],
+  list_books: ["items"], get_book: ["book", "session"], create_book: ["book"], update_book: ["book"], create_book_upload: ["upload"],
   validate_book_upload: ["revision"], list_book_revisions: ["items"], publish_book_revision: ["book", "revision"], archive_book: ["book"],
   get_book_context: ["book", "session"], list_book_outline: ["bookId", "buildId", "items", "nextCursor", "total"],
   get_book_section: ["section"], search_book: ["bookId", "buildId", "query", "items", "nextCursor", "total"],

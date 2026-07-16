@@ -36,6 +36,9 @@ test("library application isolates book services, annotations and memberships", 
     const library = new LibraryApplication({ config, catalog, collaborationRepository: collaboration });
     const local = { kind: "local", id: "local-owner", displayName: "Lokal ejer" };
     assert.deepEqual(library.listBooks(local).map((book) => book.id), ["book-a", "book-b"]);
+    assert.equal(library.updateBook(local, "book-a", { slug: "min-bog-a" }).slug, "min-bog-a");
+    assert.equal(library.resolveBookId("book-a"), "book-a");
+    assert.equal(library.resolveBookId("min-bog-a"), "book-a");
 
     const pendingUpload = await library.createBookUpload(local, "book-a", { filename: "draft.tar.gz" });
     await library.writeBookUpload(local, "book-a", pendingUpload.upload.id, new Request("http://localhost/upload", {

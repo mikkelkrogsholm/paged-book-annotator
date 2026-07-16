@@ -112,6 +112,19 @@ det redaktionelle spor ikke mister indhold.
 
 ## Offentlig deling
 
+Boglinkets URL-navn vælges eksplicit ved oprettelse og kan redigeres senere i
+admin-UI'et eller med MCP-værktøjet `update_book`. Bogens stabile interne id og
+alle per-bog grants ændres ikke. Et tidligere URL-navn gemmes som et reserveret
+alias og svarer med en permanent redirect til det aktuelle link, så allerede
+udsendte prøvelæserlinks ikke brydes.
+
+Publicerede bundles er allerede præpaginerede. Den autoriserede managed-reader
+indlejrer derfor sin config i den ikke-cachede viewer-HTML og starter den aktive
+revisions iframe under HTML-parsningen. Bogfiler adresseres med både bog-id og
+immutable revisions-id og må gemmes i browserens private cache i et år. En ny
+publicering får en ny URL og kan derfor aldrig genbruge en gammel revisions
+indhold. Login-gaten indeholder ikke dokument-URL'en, før læseren har adgang.
+
 Direkte Bun-kørsel binder til loopback, Compose publicerer kun på værtens
 loopback, og serveren afviser ikke-lokale Host-headere. Ved ekstern deling skal
 en TLS-reverse proxy derfor:

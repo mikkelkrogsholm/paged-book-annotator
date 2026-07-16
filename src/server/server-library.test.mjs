@@ -77,6 +77,12 @@ test("an instance administrator can log in and create the first book in an empty
     } });
     assert.equal(created.isError, undefined, JSON.stringify(created));
     assert.equal(created.structuredContent.book.id, "first-book");
+    const renamed = await mcpClient.callTool({ name: "update_book", arguments: {
+      bookId: "first-book",
+      slug: "mit-eget-boglink",
+    } });
+    assert.equal(renamed.isError, undefined, JSON.stringify(renamed));
+    assert.equal(renamed.structuredContent.book.slug, "mit-eget-boglink");
     const upload = await mcpClient.callTool({ name: "create_book_upload", arguments: {
       bookId: "first-book",
       filename: "first-book.tar.gz",
@@ -148,8 +154,23 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
     assert.equal(published.book.activeRevisionId, validated.revision.id);
 
     const publicConfig = await responseJson(await fetch(`${base}/api/books/second/config`));
-    assert.equal(publicConfig.book.documentUrl, "/books/second/assets/book.html");
-    assert.match(await fetch(`${base}/books/second/assets/book.html`).then((response) => response.text()), /Anden tekst/);
+    assert.equal(publicConfig.book.documentUrl, `/books/second/revisions/${validated.revision.id}/assets/book.html`);
+    const revisionAsset = await fetch(`${base}${publicConfig.book.documentUrl}`);
+    assert.equal(revisionAsset.headers.get("cache-control"), "private, max-age=31536000, immutable");
+    assert.match(await revisionAsset.text(), /Anden tekst/);
+    const eagerViewer = await fetch(`${base}/books/second`);
+    const eagerHtml = await eagerViewer.text();
+    assert.equal(eagerViewer.headers.get("cache-control"), "no-store");
+    assert.match(eagerHtml, /id="viewerBootstrap" type="application\/json"/);
+    assert.match(eagerHtml, new RegExp(`src="/books/second/revisions/${validated.revision.id}/assets/book\\.html" loading="eager"`));
+
+    const renamed = await responseJson(await fetch(`${base}/api/admin/books/second`, jsonRequest("PATCH", { slug: "min-anden-bog" })));
+    assert.equal(renamed.book.id, "second");
+    assert.equal(renamed.book.slug, "min-anden-bog");
+    const historicalLink = await fetch(`${base}/books/second?login=1`, { redirect: "manual" });
+    assert.equal(historicalLink.status, 308);
+    assert.equal(historicalLink.headers.get("location"), `${base}/books/min-anden-bog?login=1`);
+    assert.equal((await fetch(`${base}/books/min-anden-bog`)).status, 200);
 
     await responseJson(await fetch(`${base}/api/admin/users`, jsonRequest("POST", {
       email: "admin@example.test",
@@ -160,6 +181,9 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
       bookRole: "book_admin",
     })));
     await responseJson(await fetch(`${base}/api/admin/books/second/access`, jsonRequest("PUT", { preset: "privateReview", registration: "code" })));
+    const gatedHtml = await fetch(`${base}/books/min-anden-bog`).then((response) => response.text());
+    assert.match(gatedHtml, /id="viewerBootstrap"/);
+    assert.doesNotMatch(gatedHtml, /src="\/books\/second\/revisions\//);
     const accessCode = await responseJson(await fetch(`${base}/api/admin/books/second/access-codes`, jsonRequest("POST", { name: "Prøvelæsere", role: "reviewer", maxUses: 2 })));
     const enrolledResponse = await fetch(`${base}/api/books/second/auth/access-codes/accept`, jsonRequest("POST", {
       bookId: "second",
@@ -174,6 +198,8 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
     const readerConfig = await responseJson(await fetch(`${base}/api/books/second/config`, { headers: { Cookie: sessionCookie } }));
     assert.equal(readerConfig.session.capabilities.canRead, true);
     assert.equal(readerConfig.session.capabilities.canCreateAnnotations, true);
+    const authorizedHtml = await fetch(`${base}/books/min-anden-bog`, { headers: { Cookie: sessionCookie } }).then((response) => response.text());
+    assert.match(authorizedHtml, new RegExp(`src="/books/second/revisions/${validated.revision.id}/assets/book\\.html" loading="eager"`));
 
     const annotation = await responseJson(await fetch(`${base}/api/books/second/annotations`, jsonRequest("POST", {
       type: "page",

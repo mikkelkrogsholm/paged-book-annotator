@@ -26,7 +26,9 @@ export class ManagedBookCatalog {
   }
 
   createBook(input) { return this.repository.createBook(input); }
+  updateBookSlug(input) { return this.repository.updateBookSlug(input); }
   getBook(bookId) { return this.repository.getBook(bookId); }
+  getBookBySlug(value) { return this.repository.getBookBySlug(value); }
   listBooks(options) { return this.repository.listBooks(options); }
   archiveBook(input) { return this.repository.archiveBook(input); }
   getRevision(bookId, revisionId) { return this.repository.getRevision(bookId, revisionId); }

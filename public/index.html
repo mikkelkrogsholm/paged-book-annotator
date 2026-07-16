@@ -7,6 +7,7 @@
   <title>Book Viewer</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/viewer.css">
+  <!--PBA_VIEWER_BOOTSTRAP-->
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -26,7 +27,7 @@
       </button>
       <div class="render-status" id="renderStatus" role="status">
         <i></i>
-        <span>Indlæser bogen</span>
+        <span>Åbner bogen</span>
       </div>
       <button class="annotation-count-button" id="annotationPanelButton" type="button" aria-label="Kommentarer" aria-expanded="false" aria-controls="annotationPanel">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/></svg>
@@ -63,10 +64,10 @@
   <main class="reader-shell" id="readerShell" aria-label="Bogviser">
     <div class="reader-bezel">
       <div class="viewport" id="viewport">
-        <iframe id="bookFrame" title="Bog" sandbox="allow-same-origin"></iframe>
+        <iframe id="bookFrame" title="Bog" sandbox="allow-same-origin" data-eager-book-url=""></iframe>
         <div class="loading" id="loading" aria-live="polite">
           <span class="loading-sigil" id="loadingMark">B</span>
-          <p id="loadingMessage">Sætter siderne</p>
+          <p id="loadingMessage">Åbner bogen</p>
         </div>
         <button class="page-hit page-hit-prev" id="pageHitPrev" aria-label="Forrige opslag"></button>
         <button class="page-hit page-hit-next" id="pageHitNext" aria-label="Næste opslag"></button>

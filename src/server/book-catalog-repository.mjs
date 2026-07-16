@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 
 import { Database } from "bun:sqlite";
 
-export const BOOK_CATALOG_SCHEMA_VERSION = 1;
+export const BOOK_CATALOG_SCHEMA_VERSION = 2;
 
 function requireText(value, field) {
   const text = String(value ?? "").trim();
@@ -148,18 +148,37 @@ export class BookCatalogRepository {
         PRAGMA user_version = 1;
       `);
     });
-    migrateVersionOne();
+    if (version < 1) migrateVersionOne();
+    const migrateVersionTwo = this.database.transaction(() => {
+      this.database.exec(`
+        CREATE TABLE book_slug_aliases (
+          slug TEXT PRIMARY KEY,
+          book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX book_slug_aliases_book ON book_slug_aliases(book_id);
+        PRAGMA user_version = 2;
+      `);
+    });
+    if (version < 2) migrateVersionTwo();
   }
 
   createBook({ id = this.createId("book"), slug, title, subtitle = null, language = null, createdBy = null }) {
     const timestamp = this.clock().toISOString();
     const bookId = safeId(id, "id");
-    this.database.query(`
-      INSERT INTO books (id, slug, title, subtitle, language, created_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(bookId, slugValue(slug), requireText(title, "title"), subtitle ? String(subtitle).trim() : null,
-      language ? String(language).trim() : null, createdBy, timestamp, timestamp);
-    return this.getBook(bookId);
+    const normalizedSlug = slugValue(slug);
+    const create = this.database.transaction(() => {
+      if (this.database.query("SELECT 1 FROM book_slug_aliases WHERE slug = ?").get(normalizedSlug)) {
+        throw new TypeError("URL-navnet er allerede i brug.");
+      }
+      this.database.query(`
+        INSERT INTO books (id, slug, title, subtitle, language, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(bookId, normalizedSlug, requireText(title, "title"), subtitle ? String(subtitle).trim() : null,
+        language ? String(language).trim() : null, createdBy, timestamp, timestamp);
+      return this.getBook(bookId);
+    });
+    return create();
   }
 
   listBooks({ includeArchived = false } = {}) {
@@ -171,6 +190,43 @@ export class BookCatalogRepository {
 
   getBook(bookId) {
     return bookFromRow(this.database.query("SELECT * FROM books WHERE id = ?").get(safeId(bookId, "bookId")));
+  }
+
+  getBookBySlug(value) {
+    const normalizedSlug = slugValue(value);
+    const current = this.database.query("SELECT * FROM books WHERE slug = ?").get(normalizedSlug);
+    if (current) return { book: bookFromRow(current), alias: false };
+    const historical = this.database.query(`
+      SELECT books.* FROM book_slug_aliases
+      JOIN books ON books.id = book_slug_aliases.book_id
+      WHERE book_slug_aliases.slug = ?
+    `).get(normalizedSlug);
+    return historical ? { book: bookFromRow(historical), alias: true } : null;
+  }
+
+  updateBookSlug({ bookId, slug }) {
+    const normalizedBookId = safeId(bookId, "bookId");
+    const normalizedSlug = slugValue(slug);
+    const update = this.database.transaction(() => {
+      const book = this.getBook(normalizedBookId);
+      if (!book || book.status !== "active") throw new TypeError("Bogen findes ikke eller er arkiveret.");
+      if (book.slug === normalizedSlug) return book;
+      const currentOwner = this.database.query("SELECT id FROM books WHERE slug = ?").get(normalizedSlug);
+      const aliasOwner = this.database.query("SELECT book_id FROM book_slug_aliases WHERE slug = ?").get(normalizedSlug);
+      if ((currentOwner && currentOwner.id !== normalizedBookId) || (aliasOwner && aliasOwner.book_id !== normalizedBookId)) {
+        throw new TypeError("URL-navnet er allerede i brug.");
+      }
+      const timestamp = this.clock().toISOString();
+      this.database.query("DELETE FROM book_slug_aliases WHERE slug = ? AND book_id = ?").run(normalizedSlug, normalizedBookId);
+      this.database.query(`
+        INSERT INTO book_slug_aliases (slug, book_id, created_at) VALUES (?, ?, ?)
+        ON CONFLICT(slug) DO NOTHING
+      `).run(book.slug, normalizedBookId, timestamp);
+      this.database.query("UPDATE books SET slug = ?, updated_at = ? WHERE id = ?")
+        .run(normalizedSlug, timestamp, normalizedBookId);
+      return this.getBook(normalizedBookId);
+    });
+    return update();
   }
 
   archiveBook({ bookId, archivedBy = null }) {
