@@ -61,11 +61,14 @@ test("admin share center exposes complete access, secret-copy and triage states"
 test("async UI actions retain their form or button across awaits", async () => {
   const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
   const reader = await readFile(new URL("main.js", publicRoot), "utf8");
+  const auth = await readFile(new URL("auth/auth-controller.js", publicRoot), "utf8");
   assert.doesNotMatch(admin, /setFormBusy\(event\.currentTarget/);
   assert.doesNotMatch(admin, /await[^\n]*event\.currentTarget/);
   assert.doesNotMatch(reader, /await[^\n]*event\.currentTarget/);
+  assert.doesNotMatch(auth, /await confirmUiAction\([^\n]+\)[\s\S]{0,200}event\.currentTarget/);
   assert.match(admin, /const form = event\.currentTarget/);
   assert.match(reader, /const button = event\.currentTarget/);
+  assert.match(auth, /const button = event\.currentTarget/);
 });
 
 test("an empty managed library remains an interactive authentication state", async () => {

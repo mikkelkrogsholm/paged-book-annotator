@@ -75,8 +75,9 @@ export class AuthController {
       });
     });
     document.querySelector("#eraseAccountButton").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
       if (!await confirmUiAction("Slet kontodata, læseprogression og adgang? Dine annotationer anonymiseres.")) return;
-      if (await this.runAccountAction(event.currentTarget, () => this.client.eraseAccount())) window.location.reload();
+      if (await this.runAccountAction(button, () => this.client.eraseAccount())) window.location.reload();
     });
   }
 
