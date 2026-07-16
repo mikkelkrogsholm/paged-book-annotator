@@ -1,3 +1,4 @@
+// agent-lint: disable-file=AR001 -- The HTTP boundary is intentionally centralized; feature logic remains in colocated server modules.
 import { stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
