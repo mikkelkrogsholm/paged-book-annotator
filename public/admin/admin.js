@@ -99,8 +99,33 @@ const state = {
 
 function updateBookNavigationBusy() {
   const busy = state.loadingBook || state.busyForms.size > 0 || state.busyActions > 0;
-  document.querySelector("#bookSelector").disabled = busy;
+  const hasActiveBooks = state.books.some((book) => book.status !== "archived");
+  document.querySelector("#bookSelector").disabled = busy || !hasActiveBooks;
   document.querySelector("#bookGrid").inert = busy;
+}
+
+function updateBookNavigationAvailability() {
+  const hasActiveBook = Boolean(state.bookId);
+  const message = "Opret eller vælg en aktiv bog for at bruge dette område.";
+  for (const link of document.querySelectorAll("[data-requires-active-book]")) {
+    link.setAttribute("data-unavailable", String(!hasActiveBook));
+    if (hasActiveBook) {
+      link.removeAttribute("aria-describedby");
+      link.removeAttribute("title");
+    } else {
+      link.setAttribute("aria-describedby", "bookNavigationHint");
+      link.title = message;
+    }
+  }
+  document.querySelector("#bookNavigationHint").hidden = hasActiveBook;
+  const readerLink = document.querySelector("#readerLink");
+  readerLink.textContent = hasActiveBook ? "← Åbn aktiv bog" : "← Til læseren";
+  if (!hasActiveBook && document.querySelector(`.sidebar nav a[href="${location.hash}"][data-requires-active-book]`)) {
+    const url = new URL(location.href);
+    url.hash = "library";
+    history.replaceState(null, "", url);
+  }
+  updateBookNavigationBusy();
 }
 
 function isInstanceAdmin() {
@@ -440,6 +465,7 @@ async function refreshLibrary(preferredBookId) {
   state.bookId = selectActiveBookId(state.books, requested);
   state.book = state.books.find((book) => book.id === state.bookId) ?? null;
   renderBooks();
+  updateBookNavigationAvailability();
   document.querySelector("#bookWorkspace").hidden = !state.bookId;
   if (state.bookId) await loadBook(state.bookId);
   else {
@@ -545,6 +571,17 @@ async function load() {
 }
 
 document.querySelector("#bookSelector").addEventListener("change", (event) => loadBook(event.currentTarget.value).catch(ignoreAbort));
+document.querySelector(".sidebar nav").addEventListener("click", (event) => {
+  const link = event.target.closest("[data-requires-active-book]");
+  if (!link || state.bookId) return;
+  event.preventDefault();
+  const url = new URL(location.href);
+  url.hash = "library";
+  history.replaceState(null, "", url);
+  document.querySelector("#library").scrollIntoView();
+  document.querySelector("#createBookForm [name=title]")?.focus();
+  toast("Opret eller vælg en aktiv bog for at bruge dette område.");
+});
 document.querySelector("#createBookForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;

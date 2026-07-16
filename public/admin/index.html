@@ -12,12 +12,13 @@
   <aside class="sidebar">
     <a class="brand" href="/admin"><span id="bookMark">PB</span><strong id="bookTitle">Bogbibliotek</strong></a>
     <label class="book-switcher" for="bookSelector">Aktiv bog<select id="bookSelector" aria-label="Vælg bog"></select></label>
-    <nav>
-      <a href="#library">Bibliotek</a><a href="#overview">Overblik</a><a href="#revisions">Upload og revisioner</a>
-      <a href="#sharing">Adgang</a><a href="#users">Brugere</a><a href="#invitations">Invitationer</a>
-      <a href="#access-codes">Adgangskoder</a><a href="#annotations">Annotationer</a><a href="#progress">Læsning</a>
-      <a href="#surveys">Surveys</a><a href="#tokens">MCP-tokens</a><a href="#audit">Audit</a>
+    <nav aria-label="Administrationsområder">
+      <a href="#library">Bibliotek</a><a href="#overview" data-requires-active-book>Overblik</a><a href="#revisions" data-requires-active-book>Upload og revisioner</a>
+      <a href="#sharing" data-requires-active-book>Adgang</a><a href="#users" data-requires-active-book>Brugere</a><a href="#invitations" data-requires-active-book>Invitationer</a>
+      <a href="#access-codes" data-requires-active-book>Adgangskoder</a><a href="#annotations" data-requires-active-book>Annotationer</a><a href="#progress" data-requires-active-book>Læsning</a>
+      <a href="#surveys" data-requires-active-book>Surveys</a><a href="#tokens" data-requires-active-book>MCP-tokens</a><a href="#audit" data-requires-active-book>Audit</a>
     </nav>
+    <p class="book-navigation-hint" id="bookNavigationHint" hidden>Opret eller vælg en aktiv bog for at bruge de bogspecifikke områder.</p>
     <a class="reader-link" id="readerLink" href="/">← Åbn aktiv bog</a>
   </aside>
   <main>

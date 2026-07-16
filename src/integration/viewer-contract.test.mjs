@@ -75,6 +75,7 @@ test("an empty managed library remains an interactive authentication state", asy
   const html = await readFile(new URL("index.html", publicRoot), "utf8");
   const reader = await readFile(new URL("main.js", publicRoot), "utf8");
   const auth = await readFile(new URL("auth/auth-controller.js", publicRoot), "utf8");
+  const adminHtml = await readFile(new URL("admin/index.html", publicRoot), "utf8");
   const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
   assert.match(html, /id="emptyLibrary"/);
   assert.match(reader, /bookId: config\.book\?\.id \?\? ""/);
@@ -85,6 +86,11 @@ test("an empty managed library remains an interactive authentication state", asy
   assert.match(admin, /selectActiveBookId\(state\.books, requested\)/);
   assert.doesNotMatch(admin, /state\.books\[0\]\?\.id/);
   assert.match(admin, /can\("surveys:manage"\) && Boolean\(state\.book\.activeRevisionId\).*path\("outline"\)/);
+  assert.match(adminHtml, /data-requires-active-book/);
+  assert.match(adminHtml, /id="bookNavigationHint"/);
+  assert.match(admin, /function updateBookNavigationAvailability\(\)/);
+  assert.match(admin, /link\.setAttribute\("data-unavailable", String\(!hasActiveBook\)\)/);
+  assert.match(admin, /Opret eller vælg en aktiv bog for at bruge dette område/);
 });
 
 test("destructive and publishing actions use an accessible application confirmation", async () => {

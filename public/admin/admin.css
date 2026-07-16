@@ -15,6 +15,9 @@ textarea { color: inherit; font: inherit; }
 .sidebar nav { display: grid; gap: 3px; margin-top: 22px; overflow-y: auto; }
 .sidebar nav a { padding: 10px 12px; border-radius: 8px; color: var(--muted); font-size: 12px; text-decoration: none; }
 .sidebar nav a:hover { background: rgba(255,255,255,.055); color: var(--ink); }
+.sidebar nav a[data-unavailable="true"] { opacity: .48; }
+.sidebar nav a[data-unavailable="true"]:hover { background: rgba(255,255,255,.04); color: var(--ink); }
+.book-navigation-hint { margin: 12px 10px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .reader-link { margin-top: auto; color: var(--muted); font-size: 11px; text-decoration: none; }
 main { max-width: 1460px; margin-left: 230px; padding: 32px 4vw 90px; }
 .page-header,.section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
