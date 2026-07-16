@@ -102,6 +102,8 @@ test("managed HTTP library uploads, publishes and isolates a code-enrolled secon
   try {
     const initial = await responseJson(await fetch(`${base}/api/admin/books`));
     assert.deepEqual(initial.books.map((book) => book.id), ["bootstrap"]);
+    const libraryConfig = await responseJson(await fetch(`${base}/api/config`));
+    assert.equal(libraryConfig.book, null);
     await responseJson(await fetch(`${base}/api/books/bootstrap/annotations`));
     assert.equal(await Bun.file(join(dataDir, "library/bootstrap/annotations.json")).json().then((document) => document.schemaVersion), 4);
     const created = await responseJson(await fetch(`${base}/api/admin/books`, jsonRequest("POST", { id: "second", slug: "second", title: "Anden bog" })));

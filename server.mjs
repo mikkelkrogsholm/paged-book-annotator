@@ -550,7 +550,11 @@ async function routeBookViewerRequest(request, { config, service, platform = nul
     return handleMcpHttpRequest(request, { service: platform ?? service, config, bearerToken: bearerToken(request), logger });
   }
 
-  let activeService = service;
+  // Managed-library requests only acquire a book service from an explicit
+  // /books/:id or /api/books/:id route. Keeping the startup default service
+  // active here makes the library-level /api/config use the root config,
+  // whose book is intentionally null, with a book-scoped service.
+  let activeService = platform ? null : service;
   let activeConfig = config;
   let apiPathname = pathname;
   let managed = false;
