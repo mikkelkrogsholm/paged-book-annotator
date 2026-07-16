@@ -402,6 +402,20 @@ async function apiResponse(request, pathname, url, context, service, config, { p
 
 async function libraryAdminResponse(request, pathname, url, context, platform, config) {
   const { principal } = context;
+  if (pathname === "/api/admin/metadata" && request.method === "GET") {
+    const requestedBookId = url.searchParams.get("bookId") || platform.defaultBookId;
+    const bookId = requestedBookId ? platform.resolveBookId(requestedBookId, { includeArchived: true }) : "";
+    if (bookId) platform.assertBookPermission(principal, "access:manage", bookId);
+    else if (!platform.session(principal).capabilities.canManageUsers) throw new ApplicationError(403, "Administratoradgang kræves.", "forbidden");
+    return jsonResponse(200, {
+      permissions: PERMISSIONS,
+      userRoles: USER_ROLES,
+      bookRoles: BOOK_ROLES,
+      accessPresets: Object.keys(ACCESS_PRESETS),
+      accessProfiles: ACCESS_PRESETS,
+      activeAccess: bookId ? platform.accessSettings(principal, bookId) : null,
+    });
+  }
   if (pathname === "/api/admin/books" && request.method === "GET") {
     return jsonResponse(200, { books: platform.listBooks(principal, { includeArchived: true }) });
   }

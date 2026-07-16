@@ -410,7 +410,7 @@ function renderMetadataControls() {
 async function loadMetadata(signal) {
   if (state.metadata.loaded || (!can("access:manage") && !can("tokens:manage"))) return;
   try {
-    state.metadata = { ...state.metadata, ...await api("/api/admin/metadata", { signal }), loaded: true };
+    state.metadata = { ...state.metadata, ...await api(`/api/admin/metadata?bookId=${encodeURIComponent(state.bookId)}`, { signal }), loaded: true };
     renderMetadataControls();
   } catch (error) {
     if (error.name === "AbortError") throw error;
