@@ -109,6 +109,14 @@ function can(permission) {
   return isInstanceAdmin() || state.permissions.has(permission);
 }
 
+function hasAdminAccess() {
+  return isInstanceAdmin() || [
+    "books:upload", "books:publish", "books:settings", "annotations:read:all", "annotations:moderate",
+    "annotations:export", "surveys:manage", "surveys:responses:read", "surveys:export",
+    "progress:read:all", "users:read", "users:invite", "access:manage", "tokens:manage", "audit:read",
+  ].some((permission) => state.permissions.has(permission));
+}
+
 function permissionsFromSession(session) {
   const permissions = session?.capabilities?.permissions;
   if (Array.isArray(permissions)) return new Set(permissions);
@@ -505,9 +513,15 @@ async function load() {
   state.metadata = { accessProfiles: fallbackProfiles, accessPresets: Object.keys(fallbackProfiles), permissions: fallbackPermissions, loaded: false };
   renderMetadataControls();
   renderQuestionBuilder();
+  document.querySelector("#adminName").textContent = config.session.principal?.displayName ?? "Administrator";
+  if (!hasAdminAccess()) {
+    document.querySelector("#workspace").hidden = true;
+    document.querySelector("#locked").hidden = false;
+    document.querySelector(".sidebar").classList.add("is-locked");
+    return;
+  }
   applyPermissionVisibility();
   document.querySelector("#workspace").hidden = false;
-  document.querySelector("#adminName").textContent = config.session.principal?.displayName ?? "Administrator";
   document.querySelector("#account").hidden = config.session.principal?.kind !== "user";
   await refreshLibrary();
 }

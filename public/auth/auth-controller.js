@@ -4,16 +4,33 @@ function formValue(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function safeReturnPath(value, origin) {
+  if (!value?.startsWith("/") || value.startsWith("//")) return null;
+  try {
+    const target = new URL(value, origin);
+    return target.origin === origin ? `${target.pathname}${target.search}${target.hash}` : null;
+  } catch {
+    return null;
+  }
+}
+
 export function consumeCredentialQuery(locationLike = window.location, historyLike = window.history) {
   const url = new URL(locationLike.href);
-  const hasCredentialQuery = url.searchParams.has("invite") || url.searchParams.has("code");
+  const loginRequested = url.searchParams.get("login") === "1";
+  const requestedNext = loginRequested ? url.searchParams.get("next") : null;
+  const next = safeReturnPath(requestedNext, url.origin);
+  const hasCredentialQuery = url.searchParams.has("invite") || url.searchParams.has("code") || loginRequested;
   const credentials = {
     invitation: url.searchParams.get("invite"),
     accessCode: url.searchParams.get("code"),
+    loginRequested,
+    next,
   };
   if (hasCredentialQuery) {
     url.searchParams.delete("invite");
     url.searchParams.delete("code");
+    url.searchParams.delete("login");
+    url.searchParams.delete("next");
     historyLike.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }
   return credentials;
@@ -34,6 +51,7 @@ export class AuthController {
   bind() {
     document.querySelector("#accountButton").addEventListener("click", () => this.open());
     document.querySelector("#gateLoginButton").addEventListener("click", () => this.open());
+    document.querySelector("#emptyLibraryLoginButton").addEventListener("click", () => this.open());
     document.querySelector(".auth-tabs").addEventListener("click", (event) => {
       const button = event.target.closest("[data-auth-view]");
       if (button) this.show(button.dataset.authView);
@@ -64,7 +82,7 @@ export class AuthController {
   render() {
     const principal = this.session.principal;
     const account = document.querySelector("#accountButton");
-    account.textContent = principal?.displayName || "Log ind";
+    account.textContent = principal?.kind === "guest" ? "Log ind" : principal?.displayName || "Log ind";
     document.querySelector("#accountName").textContent = principal?.displayName ?? "";
     document.querySelector("#logoutForm").hidden = principal?.kind !== "user";
     document.querySelector("#accountTab").hidden = principal?.kind !== "user";
@@ -79,7 +97,8 @@ export class AuthController {
     document.querySelector("#adminLink").hidden = !canOpenAdmin;
     if (this.bookId) document.querySelector("#adminLink").href = `/admin?book=${encodeURIComponent(this.bookId)}`;
     this.show(principal?.kind === "user" ? "password" : "login");
-    const { invitation, accessCode } = consumeCredentialQuery();
+    const { invitation, accessCode, loginRequested, next } = consumeCredentialQuery();
+    this.next = next;
     if (invitation) {
       document.querySelector("#invitationSecret").value = invitation;
       this.show("invite");
@@ -87,6 +106,9 @@ export class AuthController {
     } else if (accessCode) {
       document.querySelector("#accessCodeSecret").value = accessCode;
       this.show("code");
+      this.open();
+    } else if (loginRequested) {
+      this.show("login");
       this.open();
     }
   }
@@ -149,7 +171,8 @@ export class AuthController {
       else if (form.dataset.authForm === "password") await this.client.changePassword(input);
       else if (form.dataset.authForm === "code") await this.client.acceptAccessCode(input);
       else await this.client.acceptInvitation(input);
-      window.location.reload();
+      if (this.next) window.location.assign(this.next);
+      else window.location.reload();
     } catch (error) {
       this.error.textContent = error.message;
       this.error.hidden = false;

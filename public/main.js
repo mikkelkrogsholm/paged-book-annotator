@@ -29,6 +29,29 @@ function applyBookIdentity(config) {
   document.querySelector("#bookFrame").title = config.book.title;
 }
 
+function showEmptyLibrary(config) {
+  const principal = config.session.principal;
+  const canCreateBooks = config.session.capabilities.canManageUsers
+    || (config.session.capabilities.permissions ?? []).includes("books:upload");
+  document.title = "Bogbibliotek · Book Viewer";
+  document.querySelector("#bookTitle").textContent = "Bogbibliotek";
+  document.querySelector("#bookSubtitle").textContent = "Ingen bøger endnu";
+  document.querySelector("#renderStatus span").textContent = "Biblioteket er tomt";
+  document.querySelector("#readerShell").hidden = true;
+  document.querySelector(".control-shell").hidden = true;
+  for (const id of ["navigationPanelButton", "annotationPanelButton", "surveyPanelButton"]) {
+    document.querySelector(`#${id}`).hidden = true;
+  }
+  document.querySelector("#emptyLibrary").hidden = false;
+  document.querySelector("#emptyLibraryLoginButton").hidden = principal?.kind === "user";
+  document.querySelector("#emptyLibraryAdminLink").hidden = !canCreateBooks;
+  document.querySelector("#emptyLibraryMessage").textContent = canCreateBooks
+    ? "Opret den første bog i administrationen, og upload derefter et valideret bogbundle."
+    : principal?.kind === "user"
+      ? "Der er endnu ingen bøger, du kan åbne. Kontakt en administrator."
+      : "Log ind som administrator for at oprette og udgive den første bog.";
+}
+
 function showStartupError(error) {
   document.querySelector("#loadingMessage").textContent = error.message;
   const status = document.querySelector("#renderStatus");
@@ -41,12 +64,17 @@ function showFeatureError(message) {
 }
 
 class AccessGateError extends Error {}
+class EmptyLibraryState extends Error {}
 
 try {
   const config = await fetchConfig();
-  applyBookIdentity(config);
   const capabilities = config.session.capabilities;
-  new AuthController({ session: config.session, registration: capabilities.registration, bookId: config.book.id });
+  new AuthController({ session: config.session, registration: capabilities.registration, bookId: config.book?.id ?? "" });
+  if (!config.book) {
+    showEmptyLibrary(config);
+    throw new EmptyLibraryState();
+  }
+  applyBookIdentity(config);
 
   if (!capabilities.canRead) {
     document.querySelector("#accessGate").hidden = false;
@@ -171,7 +199,9 @@ try {
     showFeatureError(`${featureStarts[index].name} er midlertidigt utilgængelig. Bogen kan stadig læses.`);
   });
 } catch (error) {
-  if (error instanceof AccessGateError) console.info(error.message);
+  if (error instanceof EmptyLibraryState) {
+    // An empty managed library is a valid first-run state, not a startup failure.
+  } else if (error instanceof AccessGateError) console.info(error.message);
   else {
     showStartupError(error);
     console.error(error);

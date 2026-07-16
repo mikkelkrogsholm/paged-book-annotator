@@ -50,6 +50,16 @@
     <button class="primary-button" id="gateLoginButton" type="button">Log ind eller acceptér invitation</button>
   </section>
 
+  <section class="access-gate" id="emptyLibrary" hidden>
+    <span class="identity-mark" aria-hidden="true">B</span>
+    <h1>Ingen bøger endnu</h1>
+    <p id="emptyLibraryMessage">Log ind som administrator for at oprette og udgive den første bog.</p>
+    <div class="empty-library-actions">
+      <button class="primary-button" id="emptyLibraryLoginButton" type="button">Log ind som administrator</button>
+      <a class="primary-button" id="emptyLibraryAdminLink" href="/admin" hidden>Åbn administrationen</a>
+    </div>
+  </section>
+
   <main class="reader-shell" id="readerShell" aria-label="Bogviser">
     <div class="reader-bezel">
       <div class="viewport" id="viewport">

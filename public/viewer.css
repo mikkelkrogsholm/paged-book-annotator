@@ -146,6 +146,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .access-gate h1 { margin: 22px 0 0; font-family: var(--serif); font-size: clamp(34px, 6vw, 64px); font-weight: 400; }
 .access-gate p { max-width: 420px; margin: 10px 0 26px; color: var(--muted); line-height: 1.55; }
 .access-gate button { min-height: 42px; padding: 0 18px; border-radius: 9px; cursor: pointer; }
+.empty-library-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.empty-library-actions a { display: inline-flex; min-height: 42px; align-items: center; padding: 0 18px; border-radius: 9px; color: var(--ink); text-decoration: none; }
 
 .auth-dialog {
   width: min(440px, calc(100vw - 28px));

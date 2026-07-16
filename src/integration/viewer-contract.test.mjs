@@ -68,6 +68,19 @@ test("async UI actions retain their form or button across awaits", async () => {
   assert.match(reader, /const button = event\.currentTarget/);
 });
 
+test("an empty managed library remains an interactive authentication state", async () => {
+  const html = await readFile(new URL("index.html", publicRoot), "utf8");
+  const reader = await readFile(new URL("main.js", publicRoot), "utf8");
+  const auth = await readFile(new URL("auth/auth-controller.js", publicRoot), "utf8");
+  const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
+  assert.match(html, /id="emptyLibrary"/);
+  assert.match(reader, /bookId: config\.book\?\.id \?\? ""/);
+  assert.match(reader, /if \(!config\.book\)[\s\S]*showEmptyLibrary\(config\)/);
+  assert.match(auth, /emptyLibraryLoginButton/);
+  assert.match(auth, /principal\?\.kind === "guest" \? "Log ind"/);
+  assert.match(admin, /if \(!hasAdminAccess\(\)\)/);
+});
+
 test("async UI completions stay bound to their originating book, survey and annotation draft", async () => {
   const admin = await readFile(new URL("admin/admin.js", publicRoot), "utf8");
   const surveys = await readFile(new URL("surveys/survey-controller.js", publicRoot), "utf8");
