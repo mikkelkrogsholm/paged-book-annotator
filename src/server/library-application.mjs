@@ -479,9 +479,31 @@ export class LibraryApplication {
     return this.delegate(principal, bookId, "resetUserPassword", userId, newPassword);
   }
 
-  createToken(principal, input) {
+  async createToken(principal, input) {
     const instanceAdmin = input.instanceAdmin === true || input.instanceAdmin === "true";
-    const grants = instanceAdmin ? [] : input.grants ?? (input.bookIds?.length
+    if (instanceAdmin) {
+      if (!instanceAdministrator(principal)) deny("Kun en instansadministrator kan oprette et instansadministrator-token.");
+      if (input.actorUserId != null && (principal?.kind !== "user" || input.actorUserId !== principal.id)) {
+        deny("Et token kan kun bindes til den bruger, der opretter det.");
+      }
+      const token = await this.collaboration.createServiceToken({
+        ...input,
+        instanceAdmin: true,
+        scopes: undefined,
+        grants: [],
+        createdBy: actorId(principal),
+      });
+      this.collaboration.audit({
+        principal,
+        action: "token.create",
+        resourceType: "service_token",
+        resourceId: token.id,
+        bookId: null,
+        details: { name: token.name, grants: [], instanceAdmin: true },
+      });
+      return token;
+    }
+    const grants = input.grants ?? (input.bookIds?.length
       ? input.bookIds.map((bookId) => ({ bookId, permissions: input.scopes }))
       : undefined);
     for (const grant of grants ?? []) this.bookContext(grant.bookId);
@@ -492,7 +514,7 @@ export class LibraryApplication {
         memberships: grants.map((grant) => this.collaboration.principalForUser(principal.id, grant.bookId)?.membership).filter(Boolean),
       }
       : principal;
-    return this.serviceForBook(bookId).createToken(effectivePrincipal, { ...input, instanceAdmin, grants });
+    return this.serviceForBook(bookId).createToken(effectivePrincipal, { ...input, instanceAdmin: false, grants });
   }
 
   listTokens(principal, options = {}) {

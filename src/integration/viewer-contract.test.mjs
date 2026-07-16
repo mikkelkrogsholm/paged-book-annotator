@@ -88,7 +88,13 @@ test("an empty managed library remains an interactive authentication state", asy
   assert.match(admin, /can\("surveys:manage"\) && Boolean\(state\.book\.activeRevisionId\).*path\("outline"\)/);
   assert.match(adminHtml, /data-requires-active-book/);
   assert.match(adminHtml, /id="bookNavigationHint"/);
+  assert.ok(adminHtml.indexOf('id="tokens"') < adminHtml.indexOf('id="bookWorkspace"'));
+  assert.match(adminHtml, /href="#tokens">MCP-tokens/);
+  assert.match(adminHtml, /instansadministrator-token kræver ingen bog/i);
   assert.match(admin, /function updateBookNavigationAvailability\(\)/);
+  assert.match(admin, /function tokenListPath\(\)/);
+  assert.match(admin, /state\.bookId \? `\/api\/admin\/metadata\?bookId=/);
+  assert.match(admin, /await loadMetadata\(\)[\s\S]*api\("\/api\/admin\/tokens"\)/);
   assert.match(admin, /link\.setAttribute\("data-unavailable", String\(!hasActiveBook\)\)/);
   assert.match(admin, /Opret eller vælg en aktiv bog for at bruge dette område/);
 });

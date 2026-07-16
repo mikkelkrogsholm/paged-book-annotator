@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { startBookViewer, stopBookViewer } from "../../server.mjs";
 import { createOperationalLogger } from "./operational-logger.mjs";
@@ -36,6 +38,7 @@ test("an instance administrator can log in and create the first book in an empty
 
   const running = await startBookViewer({ configPath });
   const base = running.server.url.origin;
+  const mcpClient = new Client({ name: "empty-library-bootstrap-test", version: "1.0.0" }, { capabilities: {} });
   try {
     await running.platform.collaboration.ensureBootstrapAdmin({
       email: "owner@example.test",
@@ -56,13 +59,34 @@ test("an instance administrator can log in and create the first book in an empty
 
     const initialBooks = await responseJson(await fetch(`${base}/api/admin/books`, { headers: { Cookie: sessionCookie } }));
     assert.deepEqual(initialBooks.books, []);
-    const created = await responseJson(await fetch(`${base}/api/admin/books`, jsonRequest("POST", {
-      id: "first-book",
+    const tokenResponse = await fetch(`${base}/api/admin/tokens`, jsonRequest("POST", {
+      name: "Bootstrap-agent",
+      instanceAdmin: "true",
+      expiresInHours: 1,
+    }, sessionCookie));
+    const adminToken = (await responseJson(tokenResponse)).token;
+    assert.equal(adminToken.instanceAdmin, true);
+    assert.deepEqual(adminToken.bookGrants, []);
+
+    await mcpClient.connect(new StreamableHTTPClientTransport(new URL("/mcp", base), {
+      requestInit: { headers: { Authorization: `Bearer ${adminToken.secret}` } },
+    }));
+    const created = await mcpClient.callTool({ name: "create_book", arguments: {
       slug: "first-book",
       title: "Første bog",
-    }, sessionCookie)));
-    assert.equal(created.book.id, "first-book");
+    } });
+    assert.equal(created.isError, undefined, JSON.stringify(created));
+    assert.equal(created.structuredContent.book.id, "first-book");
+    const upload = await mcpClient.callTool({ name: "create_book_upload", arguments: {
+      bookId: "first-book",
+      filename: "first-book.tar.gz",
+      contentType: "application/gzip",
+      sizeBytes: 1024,
+    } });
+    assert.equal(upload.isError, undefined, JSON.stringify(upload));
+    assert.match(upload.structuredContent.upload.uploadUrl, /^\/api\/admin\/books\/first-book\/uploads\//);
   } finally {
+    await mcpClient.close().catch(() => {});
     await stopBookViewer(running.server);
     await rm(root, { recursive: true, force: true });
   }

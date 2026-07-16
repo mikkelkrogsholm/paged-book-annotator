@@ -1,14 +1,6 @@
 import { confirmUiAction } from "../ui-state.js";
 import { selectActiveBookId } from "./book-selection.js";
-
-function escapeHtml(value) {
-  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-}
-
-function formatDate(value) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("da-DK", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-}
+import { emptyRow, escapeHtml, formatDate, option, renderAccessCodes, renderAudit, renderInvitations, renderProgress, renderTokenTable } from "./admin-table-renderers.js";
 
 async function api(path, options = {}) {
   const { json, ...requestOptions } = options;
@@ -36,14 +28,14 @@ function formObject(form) {
   return Object.fromEntries([...new FormData(form)].filter(([, value]) => value !== ""));
 }
 
-function option(value, current, label = value) {
-  return `<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(label)}</option>`;
-}
-
-function emptyRow(columns, message) { return `<tr><td colspan="${columns}" class="empty-cell">${escapeHtml(message)}</td></tr>`; }
 function list(payload, key) { return Array.isArray(payload) ? payload : Array.isArray(payload?.[key]) ? payload[key] : Array.isArray(payload?.items) ? payload.items : []; }
 function bookPath(segment = "", bookId = state.bookId) { return `/api/admin/books/${encodeURIComponent(bookId)}${segment ? `/${segment}` : ""}`; }
 function readerPath(book = state.book) { return `/books/${encodeURIComponent(book?.slug ?? book?.id ?? state.bookId)}`; }
+function tokenListPath() { return isInstanceAdmin() ? "/api/admin/tokens" : bookPath("tokens"); }
+function tokenRevokePath(id) {
+  const path = `/api/admin/tokens/${encodeURIComponent(id)}`;
+  return isInstanceAdmin() ? path : `${path}?bookId=${encodeURIComponent(state.bookId)}`;
+}
 
 function toast(message) {
   const node = document.querySelector("#toast");
@@ -190,6 +182,17 @@ function applyPermissionVisibility() {
   const instanceAdminToggle = document.querySelector("[name=instanceAdmin]");
   instanceAdminToggle.closest("label").hidden = !isInstanceAdmin();
   instanceAdminToggle.disabled = !isInstanceAdmin();
+  updateTokenGrantAvailability();
+}
+
+function updateTokenGrantAvailability() {
+  const instanceAdmin = isInstanceAdmin() && document.querySelector("[name=instanceAdmin]").checked;
+  document.querySelector("#tokenPresets").hidden = instanceAdmin;
+  document.querySelector("#instanceTokenHelp").hidden = !instanceAdmin;
+  for (const fieldset of document.querySelectorAll("#tokenBookGrants, #tokenPermissionGrants")) {
+    fieldset.hidden = instanceAdmin;
+    fieldset.disabled = instanceAdmin;
+  }
 }
 
 function ignoreAbort(error) {
@@ -215,6 +218,7 @@ function renderBooks() {
     </article>`;
   }).join("") || '<p class="empty-library">Biblioteket er tomt. Opret den første bog ovenfor.</p>';
   document.querySelector("#tokenBookGrid").innerHTML = state.books.filter((book) => book.status !== "archived").map((book) => `<label><input type="checkbox" name="tokenBook" value="${escapeHtml(book.id)}"${book.id === state.bookId ? " checked" : ""}>${escapeHtml(book.title ?? book.id)}</label>`).join("");
+  updateTokenGrantAvailability();
 }
 
 function renderAccess(policy) {
@@ -268,29 +272,8 @@ function renderUsers(users) {
   }).join("") || emptyRow(5, "Ingen brugere har adgang til denne bog.");
 }
 
-function renderInvitations(invitations) {
-  document.querySelector("#invitationsTable").innerHTML = invitations.map((invite) => {
-    const status = invite.acceptedAt ? "Accepteret" : invite.revokedAt ? "Tilbagekaldt" : "Åben";
-    const revoke = invite.acceptedAt || invite.revokedAt ? "" : `<button class="secondary" data-action="revoke-invite" data-id="${escapeHtml(invite.id)}">Tilbagekald</button>`;
-    return `<tr><td>${escapeHtml(invite.email)}</td><td>${escapeHtml(invite.role)}</td><td>${formatDate(invite.expiresAt)}</td><td>${status}</td><td>${revoke}</td></tr>`;
-  }).join("") || emptyRow(5, "Der er ingen invitationer til denne bog.");
-}
-
-function renderAccessCodes(codes) {
-  document.querySelector("#accessCodesTable").innerHTML = codes.map((code) => `<tr>
-    <td>${escapeHtml(code.name)}</td><td>${escapeHtml(code.role)}</td>
-    <td>${code.useCount ?? 0} / ${code.maxUses ?? "∞"}</td><td>${formatDate(code.expiresAt)}</td>
-    <td>${code.revokedAt ? "Tilbagekaldt" : `<button class="secondary" data-action="revoke-code" data-id="${escapeHtml(code.id)}">Tilbagekald</button>`}</td>
-  </tr>`).join("") || emptyRow(5, "Der er ingen adgangskoder til denne bog.");
-}
-
 function renderTokens(tokens) {
-  document.querySelector("#tokensTable").innerHTML = tokens.map((token) => {
-    const revoke = token.revokedAt ? "" : `<button class="secondary" data-action="revoke-token" data-id="${escapeHtml(token.id)}">Tilbagekald</button>`;
-    const bookGrants = token.bookGrants ?? token.grants ?? [];
-    const grants = token.instanceAdmin ? "Instansadministrator" : bookGrants.map((grant) => `${grant.bookId}: ${(grant.permissions ?? []).join(", ")}`).join(" · ") || state.bookId;
-    return `<tr><td>${escapeHtml(token.name)}</td><td><code>${escapeHtml(token.prefix)}</code></td><td><small>${escapeHtml(grants)}</small></td><td>${formatDate(token.expiresAt)}${token.revokedAt ? " · tilbagekaldt" : ""}</td><td>${revoke}</td></tr>`;
-  }).join("") || emptyRow(5, "Der er ingen tokens med adgang til denne bog.");
+  renderTokenTable(tokens, { activeBookId: state.bookId, instanceAdmin: isInstanceAdmin() });
 }
 
 function renderAnnotations(annotations) {
@@ -315,20 +298,6 @@ function renderAnnotations(annotations) {
       </td><td>${escapeHtml(note.comment)}</td><td>${triage}</td><td>${formatDate(note.updatedAt)}</td>
     </tr>`;
   }).join("") || emptyRow(5, annotations.length ? "Ingen annotationer matcher filtrene." : "Der er endnu ingen annotationer.");
-}
-
-function renderProgress(progress) {
-  document.querySelector("#progressTable").innerHTML = progress.map((item) => {
-    const pages = item.readPages ?? [];
-    const readAnchors = pages.map((page) => escapeHtml(page.anchorId)).join(", ");
-    return `<tr>
-      <td>${escapeHtml(item.displayName)}<small>${escapeHtml(item.email)}</small></td>
-      <td>${escapeHtml(item.anchorId)}<small>Side ${item.pageNumber ?? "—"}</small></td>
-      <td>${item.engagedPercent ?? 0}% engageret
-        <small>Seneste position ${item.percent ?? 0}%${item.completedAt ? " · færdig" : ""}</small>
-      </td><td>${pages.length}<small>${readAnchors}</small></td><td>${formatDate(item.updatedAt)}</td>
-    </tr>`;
-  }).join("") || emptyRow(5, "Ingen læsere har delt læsestatus.");
 }
 
 function surveyDefinition(survey) { return survey.draft?.definition ?? survey.published?.definition ?? null; }
@@ -425,10 +394,6 @@ function renderSurveys(surveys, responses) {
   }).join("") || emptyRow(5, "Der er endnu ingen surveybesvarelser.");
 }
 
-function renderAudit(events) {
-  document.querySelector("#auditTable").innerHTML = events.map((event) => `<tr><td>${formatDate(event.createdAt)}</td><td>${escapeHtml(event.actorType)}<small>${escapeHtml(event.actorId)}</small></td><td>${escapeHtml(event.action)}</td><td>${escapeHtml(event.resourceType)}<small>${escapeHtml(event.resourceId ?? "")}</small></td></tr>`).join("") || emptyRow(4, "Auditloggen er tom.");
-}
-
 function renderMetadataControls() {
   state.metadata.accessProfiles ??= fallbackProfiles;
   const presets = state.metadata.accessPresets ?? Object.keys(state.metadata.accessProfiles);
@@ -440,7 +405,8 @@ function renderMetadataControls() {
 async function loadMetadata(signal) {
   if (state.metadata.loaded || (!can("access:manage") && !can("tokens:manage"))) return;
   try {
-    state.metadata = { ...state.metadata, ...await api(`/api/admin/metadata?bookId=${encodeURIComponent(state.bookId)}`, { signal }), loaded: true };
+    const metadataPath = state.bookId ? `/api/admin/metadata?bookId=${encodeURIComponent(state.bookId)}` : "/api/admin/metadata";
+    state.metadata = { ...state.metadata, ...await api(metadataPath, { signal }), loaded: true };
     renderMetadataControls();
   } catch (error) {
     if (error.name === "AbortError") throw error;
@@ -476,6 +442,9 @@ async function refreshLibrary(preferredBookId) {
     document.querySelector("#bookTitle").textContent = "Bogbibliotek";
     document.querySelector("#bookMark").textContent = "PB";
     document.querySelector("#readerLink").href = "/";
+    applyPermissionVisibility();
+    await loadMetadata();
+    if (isInstanceAdmin()) renderTokens(list(await api("/api/admin/tokens"), "tokens"));
   }
 }
 
@@ -519,7 +488,7 @@ async function loadBook(bookId) {
       featureApi(can("users:read"), path("members"), { members: [] }, controller.signal, "Brugere"),
       featureApi(can("users:read"), path("invitations"), { invitations: [] }, controller.signal, "Invitationer"),
       featureApi(can("users:read"), path("access-codes"), { accessCodes: [] }, controller.signal, "Adgangskoder"),
-      featureApi(can("tokens:manage"), path("tokens"), { tokens: [] }, controller.signal, "Tokens"),
+      featureApi(can("tokens:manage"), tokenListPath(), { tokens: [] }, controller.signal, "Tokens"),
       featureApi(can("annotations:read:all"), path("annotations"), { annotations: [] }, controller.signal, "Annotationer"),
       featureApi(can("progress:read:all"), path("progress"), { progress: [] }, controller.signal, "Læsestatus"),
       featureApi(can("audit:read"), path("audit"), { events: [] }, controller.signal, "Auditlog"),
@@ -667,9 +636,10 @@ document.querySelector("#tokenForm").addEventListener("submit", async (event) =>
   event.preventDefault(); const form = event.currentTarget; const input = { ...formObject(form), bookIds: [...form.querySelectorAll("[name=tokenBook]:checked")].map((node) => node.value), scopes: [...form.querySelectorAll("[name=scope]:checked")].map((node) => node.value) };
   if (!input.instanceAdmin && (!input.bookIds.length || !input.scopes.length)) return toast("Vælg mindst én bog og én permission.");
   setFormBusy(form, true);
-  try { const payload = await api("/api/admin/tokens", { method: "POST", json: input }); const token = payload.token ?? payload; const output = document.querySelector("#tokenOutput"); output.textContent = `Kopiér nu — tokenet vises ikke igen: ${token.secret}`; output.hidden = false; renderTokens(list(await api(bookPath("tokens")), "tokens")); } catch (error) { toast(error.message); }
+  try { const payload = await api("/api/admin/tokens", { method: "POST", json: input }); const token = payload.token ?? payload; const output = document.querySelector("#tokenOutput"); output.textContent = `Kopiér nu — tokenet vises ikke igen: ${token.secret}`; output.hidden = false; renderTokens(list(await api(tokenListPath()), "tokens")); } catch (error) { toast(error.message); }
   finally { setFormBusy(form, false); }
 });
+document.querySelector("[name=instanceAdmin]").addEventListener("change", updateTokenGrantAvailability);
 document.querySelector("#passwordForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -786,7 +756,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.action === "copy-invitation-link") await copyText(state.invitationUrl);
     if (button.dataset.action === "revoke-invite" && await confirmUiAction("Tilbagekald invitationen? Linket stopper med at virke med det samme.")) { await api(`${bookPath("invitations")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderInvitations(list(await api(bookPath("invitations")), "invitations")); }
     if (button.dataset.action === "revoke-code" && await confirmUiAction("Tilbagekald adgangskoden? Den stopper med at virke med det samme.")) { await api(`${bookPath("access-codes")}/${encodeURIComponent(button.dataset.id)}`, { method: "DELETE" }); renderAccessCodes(list(await api(bookPath("access-codes")), "accessCodes")); }
-    if (button.dataset.action === "revoke-token" && await confirmUiAction("Tilbagekald tokenet? Agenter, der bruger det, mister adgang med det samme.")) { await api(`/api/admin/tokens/${encodeURIComponent(button.dataset.id)}?bookId=${encodeURIComponent(state.bookId)}`, { method: "DELETE" }); renderTokens(list(await api(bookPath("tokens")), "tokens")); }
+    if (button.dataset.action === "revoke-token" && await confirmUiAction("Tilbagekald tokenet? Agenter, der bruger det, mister adgang med det samme.")) { await api(tokenRevokePath(button.dataset.id), { method: "DELETE" }); renderTokens(list(await api(tokenListPath()), "tokens")); }
     if (button.dataset.action === "remove-survey-question") {
       if (document.querySelectorAll(".survey-question-editor").length <= 1) return toast("En survey skal have mindst ét spørgsmål.");
       button.closest(".survey-question-editor").remove();

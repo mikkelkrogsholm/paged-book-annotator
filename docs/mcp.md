@@ -15,11 +15,15 @@ igen i den fælles application service.
 ## Sikker startsekvens
 
 1. Læs `pba://docs/mcp/v1` og `pba://contracts/mcp-tools/v1`.
-2. Kald `list_books`; gæt aldrig et `bookId`.
-3. Kald `get_book_context` for den valgte bog og kontrollér capabilities.
-4. Følg workflowet i toolkontrakten. Brug stabile id'er og ankre fra list/get
+2. Kald `list_books`; gæt aldrig et `bookId`. Hvis listen er tom, kan kun et
+   instansadministrator-token fortsætte med `create_book`.
+3. Efter `create_book`: kald `create_book_upload`, send bundlet til den returnerede
+   HTTP `PUT`-URL, kald `validate_book_upload` og derefter
+   `publish_book_revision`.
+4. Kald `get_book_context` for den valgte bog og kontrollér capabilities.
+5. Følg workflowet i toolkontrakten. Brug stabile id'er og ankre fra list/get
    tools; sidetal er kun hints.
-5. Ved en domænefejl fra tool-handleren: læs `structuredContent.error.code`,
+6. Ved en domænefejl fra tool-handleren: læs `structuredContent.error.code`,
    `retryable`, `suggestedAction` og `requestId`. Gentag kun automatisk, når
    `retryable` er `true`. En inputfejl, som MCP SDK'et afviser før handleren,
    er derimod en protokol-/tekstfejl og har ikke nødvendigvis
@@ -50,7 +54,9 @@ request-id, toolnavn, bog-id, principaltype, varighed og sikker fejlkode.
 Opret et token under `/admin` → **MCP-tokens**. Vælg et preset eller eksplicitte
 permissions og boggrants. Hemmeligheden vises én gang; kun dens hash gemmes.
 Et instansadministrator-token kan administrere alle bøger og brugere og kan kun
-udstedes af en instansadministrator.
+udstedes af en instansadministrator. Det kræver ingen eksisterende bog og er
+derfor bootstrap-tokenet til en tom installation: det kan oprette den første bog,
+starte bundle-uploaden, validere og publicere revisionen.
 
 Stdio:
 
@@ -81,6 +87,7 @@ forbruger den persistente stagingpost.
 | --- | --- |
 | `pba://docs/mcp/v1` | Denne komplette agentguide |
 | `pba://contracts/mcp-tools/v1` | Maskinlæsbare kontrakter for alle tools |
+| `pba://contracts/admin-ui-mcp-parity/v1` | Komplet maskinlæsbar UI→MCP-paritetskontrakt |
 | `pba://contracts/book-bundle/v1` | Normativ bundlekontrakt |
 | `pba://schemas/book-viewer.bundle.v1.json` | Bundlemanifestets JSON Schema |
 | `pba://schemas/survey.v1.json` | Immutable surveydefinition V1 |
@@ -91,6 +98,12 @@ forbruger den persistente stagingpost.
 | `book://{bookId}/surveys` | Aktive surveys for den publicerede revision |
 
 ## Komplet toolkatalog
+
+Admin UI og MCP er to klienter af samme application service. Enhver vedvarende
+handling i admin UI skal have en MCP-ækvivalent med samme autorisation og effekt.
+UI-bekvemmeligheder som lokal filtrering, fokus og kopiering ændrer ingen data og
+er derfor ikke selvstændige tools. Bundlebytes sendes til den kortlivede `PUT`-URL
+fra `create_book_upload`; de placeres aldrig i MCP-argumenter.
 
 Alle 51 tools nedenfor findes i `tools/list`; intet tool må registreres uden en
 kontrakt og et outputskema. Permissionkolonnen viser minimumskravet. Nogle

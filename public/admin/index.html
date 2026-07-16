@@ -16,7 +16,7 @@
       <a href="#library">Bibliotek</a><a href="#overview" data-requires-active-book>Overblik</a><a href="#revisions" data-requires-active-book>Upload og revisioner</a>
       <a href="#sharing" data-requires-active-book>Adgang</a><a href="#users" data-requires-active-book>Brugere</a><a href="#invitations" data-requires-active-book>Invitationer</a>
       <a href="#access-codes" data-requires-active-book>Adgangskoder</a><a href="#annotations" data-requires-active-book>Annotationer</a><a href="#progress" data-requires-active-book>Læsning</a>
-      <a href="#surveys" data-requires-active-book>Surveys</a><a href="#tokens" data-requires-active-book>MCP-tokens</a><a href="#audit" data-requires-active-book>Audit</a>
+      <a href="#surveys" data-requires-active-book>Surveys</a><a href="#tokens">MCP-tokens</a><a href="#audit" data-requires-active-book>Audit</a>
     </nav>
     <p class="book-navigation-hint" id="bookNavigationHint" hidden>Opret eller vælg en aktiv bog for at bruge de bogspecifikke områder.</p>
     <a class="reader-link" id="readerLink" href="/">← Åbn aktiv bog</a>
@@ -35,6 +35,12 @@
           <button type="submit">Opret bog</button>
         </form>
         <div class="book-grid" id="bookGrid" aria-live="polite"></div>
+      </section>
+
+      <section id="tokens"><div class="section-heading"><div><span>Agent- og MCP-adgang</span><h2>Service-tokens</h2></div><p>Et instansadministrator-token kræver ingen bog og kan oprette bøger, uploade bundles og udføre de samme administrative handlinger som UI’et.</p></div>
+        <div class="token-presets" id="tokenPresets" role="group" aria-label="Tokenpresets"><button class="secondary" type="button" data-token-preset="reader-agent">Læseagent</button><button class="secondary" type="button" data-token-preset="review-agent">Reviewagent</button><button class="secondary" type="button" data-token-preset="survey-admin">Surveyadministrator</button></div>
+        <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" aria-label="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" aria-label="Gyldig i timer" required><label><input name="instanceAdmin" type="checkbox" value="true"> Instansadministrator</label><button type="submit">Opret token</button></div><p class="field-help" id="instanceTokenHelp" hidden>Giver adgang til hele installationen, inklusive oprettelse af den første bog og bundle-upload via MCP.</p><fieldset id="tokenBookGrants"><legend>Bøger (samme permissions anvendes på de valgte bøger)</legend><div class="scope-grid" id="tokenBookGrid"></div></fieldset><fieldset id="tokenPermissionGrants"><legend>Permissions — se <a href="/docs/mcp" target="_blank">agentguiden</a> for betydning og workflows</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
+        <output class="secret-output" id="tokenOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Prefix</th><th>Bøger og rettigheder</th><th>Udløber</th><th></th></tr></thead><tbody id="tokensTable"></tbody></table></div>
       </section>
 
       <div id="bookWorkspace" hidden>
@@ -115,12 +121,6 @@
           <div class="table-wrap"><table><thead><tr><th>Survey</th><th>Mål</th><th>Status</th><th>Svar</th><th></th></tr></thead><tbody id="surveysTable"></tbody></table></div>
           <div class="section-heading survey-response-heading" id="surveyResponsesHeading"><div><span>Versionerede svar</span><h2>Surveybesvarelser</h2></div><p>Fritekst vises kun her og i autoriseret eksport; den skrives aldrig til logs.</p></div>
           <div class="table-wrap"><table><thead><tr><th>Læser</th><th>Survey</th><th>Svar</th><th>Revision</th><th>Opdateret</th></tr></thead><tbody id="surveyResponsesTable"></tbody></table></div>
-        </section>
-
-        <section id="tokens"><div class="section-heading"><div><span>Agent- og MCP-adgang</span><h2>Service-tokens</h2></div><p>Tokenet begrænses til den valgte bog. Instansgrants kræver særskilt administratorpermission.</p></div>
-          <div class="token-presets" role="group" aria-label="Tokenpresets"><button class="secondary" type="button" data-token-preset="reader-agent">Læseagent</button><button class="secondary" type="button" data-token-preset="review-agent">Reviewagent</button><button class="secondary" type="button" data-token-preset="survey-admin">Surveyadministrator</button></div>
-          <form class="token-form" id="tokenForm"><div class="inline-form compact"><input name="name" placeholder="Token-navn" aria-label="Token-navn" required><input name="expiresInHours" type="number" min="1" max="8760" value="720" aria-label="Gyldig i timer" required><label><input name="instanceAdmin" type="checkbox" value="true"> Instansadministrator</label><button type="submit">Opret token</button></div><fieldset><legend>Bøger (samme permissions anvendes på de valgte bøger)</legend><div class="scope-grid" id="tokenBookGrid"></div></fieldset><fieldset><legend>Permissions — se <a href="/docs/mcp" target="_blank">agentguiden</a> for betydning og workflows</legend><div class="scope-grid" id="scopeGrid"></div></fieldset></form>
-          <output class="secret-output" id="tokenOutput" hidden></output><div class="table-wrap"><table><thead><tr><th>Navn</th><th>Prefix</th><th>Bøger og rettigheder</th><th>Udløber</th><th></th></tr></thead><tbody id="tokensTable"></tbody></table></div>
         </section>
 
         <section id="audit"><div class="section-heading"><div><span>Sporbarhed</span><h2>Auditlog</h2></div></div><div class="table-wrap"><table><thead><tr><th>Tid</th><th>Aktør</th><th>Handling</th><th>Ressource</th></tr></thead><tbody id="auditTable"></tbody></table></div></section>

@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { createBookViewerServer, loadBookViewerConfig } from "../../server.mjs";
-import { createPagedBookMcpServer, MCP_TOOL_CONTRACTS } from "./mcp-server.mjs";
+import { ADMIN_UI_MCP_PARITY, createPagedBookMcpServer, MCP_TOOL_CONTRACTS } from "./mcp-server.mjs";
 import { MCP_TOOL_OUTPUT_SCHEMAS } from "./mcp-contract-schemas.mjs";
 import { mcpToolError } from "./mcp-tool-contracts.mjs";
 import { createOperationalLogger } from "./operational-logger.mjs";
@@ -230,12 +230,15 @@ test("multi-book MCP validates explicit book context and keeps bundle bytes out 
     assert.equal(resources.resources.some((resource) => resource.uri === "book://book-a/metadata"), true);
     assert.equal(resources.resources.some((resource) => resource.uri === "pba://contracts/book-bundle/v1"), true);
     assert.equal(resources.resources.some((resource) => resource.uri === "pba://schemas/book-viewer.bundle.v1.json"), true);
+    assert.equal(resources.resources.some((resource) => resource.uri === "pba://contracts/admin-ui-mcp-parity/v1"), true);
     const metadata = await client.readResource({ uri: "book://book-a/metadata" });
     assert.match(metadata.contents[0].text, /"title": "Bog A"/);
     const contract = await client.readResource({ uri: "pba://contracts/book-bundle/v1" });
     assert.match(contract.contents[0].text, /bun run bundle init/);
     const schema = await client.readResource({ uri: "pba://schemas/book-viewer.bundle.v1.json" });
     assert.equal(JSON.parse(schema.contents[0].text).properties.schemaVersion.const, 1);
+    const parity = await client.readResource({ uri: "pba://contracts/admin-ui-mcp-parity/v1" });
+    assert.equal(JSON.parse(parity.contents[0].text).areas.length, ADMIN_UI_MCP_PARITY.areas.length);
     const completions = logRecords.filter((record) => record.event === "mcp.completed");
     assert.equal(new Set(completions.map((record) => record.requestId)).size, completions.length);
     assert.equal(completions.filter((record) => record.operation === "tool:create_book_upload").at(0).bookId, "book-b");
@@ -385,6 +388,8 @@ test("legacy MCP metadata requires read permission", async () => {
 
 test("MCP contracts are complete, reject no-op writes, scope token revocation, and mask internals", async () => {
   assert.deepEqual(Object.keys(MCP_TOOL_OUTPUT_SCHEMAS).sort(), Object.keys(MCP_TOOL_CONTRACTS).sort());
+  const parityTools = ADMIN_UI_MCP_PARITY.areas.flatMap((area) => area.tools).sort();
+  assert.deepEqual(parityTools, Object.keys(MCP_TOOL_CONTRACTS).sort());
   assert.equal(mcpToolError(Object.assign(new Error("unprocessable"), { status: 422 }), { requestId: "request-1" }).error.code, "invalid_input");
   const masked = mcpToolError(new Error("database password leaked"), { requestId: "request-2" });
   assert.equal(masked.error.code, "internal_error");

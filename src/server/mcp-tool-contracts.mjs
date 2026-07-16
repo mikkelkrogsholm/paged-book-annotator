@@ -44,7 +44,7 @@ const definitions = [
   ["create_access_code", ["users:invite"], "Opret en begrænset tilmeldingskode; koden returneres én gang.", { bookId: "book-id", name: "Prøvelæsere", role: "reviewer" }, "enrollment", "create"],
   ["list_access_codes", ["users:read"], "List adgangskodemetadata uden plaintext-koder.", { bookId: "book-id" }, "enrollment", "read"],
   ["revoke_access_code", ["users:invite"], "Tilbagekald en adgangskode straks.", { bookId: "book-id", id: "code-id" }, "enrollment", "delete"],
-  ["create_service_token", ["tokens:manage"], "Opret et udløbende token med eksplicitte, eventuelt forskellige permissions per bog.", { name: "Redaktør-agent", grants: [{ bookId: "book-id", permissions: ["books:read", "annotations:read"] }] }, "tokens", "create"],
+  ["create_service_token", ["tokens:manage"], "Opret et udløbende instansadministrator-token uden bog eller et scoped token med eksplicitte boggrants.", { name: "Bootstrap-agent", instanceAdmin: true, expiresInHours: 720 }, "tokens", "create"],
   ["list_service_tokens", ["tokens:manage"], "List tokenmetadata, grants og udløb uden secrets.", { bookId: "book-id" }, "tokens", "read"],
   ["revoke_service_token", ["tokens:manage"], "Tilbagekald et token; bogadministratorer skal angive den bog, der autoriserer handlingen.", { id: "token-id", bookId: "book-id" }, "tokens", "delete"],
   ["list_audit_events", ["audit:read"], "List pseudonymiserede mutationsevents uden PII/fritekstsvar.", { bookId: "book-id", limit: 100 }, "administration", "read"],
@@ -80,6 +80,21 @@ const definitions = [
   ["list_survey_responses", ["surveys:responses:read"], "List pseudonymiserede svar med surveyversion og revisionsanker.", { bookId: "book-id", surveyId: "survey-id" }, "survey-admin", "read"],
   ["export_review_bundle", ["annotations:read:all", "annotations:export", "surveys:export"], "Eksportér alle annotationer, surveydefinitioner/-svar og valgfri progression i review-export V1; includeProgress=true kræver også progress:read:all.", { bookId: "book-id", includeProgress: false }, "review-export", "read"],
 ];
+
+export const ADMIN_UI_MCP_PARITY = Object.freeze({
+  contractVersion: 1,
+  guarantee: "Hver vedvarende UI-funktion har en MCP-ækvivalent med samme application-service-autorisation og effekt.",
+  areas: Object.freeze([
+    { uiArea: "Bibliotek og revisioner", tools: ["list_books", "get_book", "create_book", "create_book_upload", "validate_book_upload", "list_book_revisions", "publish_book_revision", "archive_book"] },
+    { uiArea: "Læsning og navigation", tools: ["get_book_context", "list_book_outline", "get_book_section", "search_book"] },
+    { uiArea: "Annotationer", tools: ["get_annotation_context", "list_changes_since", "list_annotations", "create_annotation", "update_annotation", "delete_annotation", "export_annotations", "import_annotations"] },
+    { uiArea: "Læseprogression", tools: ["get_reading_progress", "record_reading_progress", "list_reader_progress"] },
+    { uiArea: "Brugere og adgang", tools: ["list_users", "list_book_members", "get_access_settings", "update_access_settings", "create_user", "update_user_access", "reset_user_password"] },
+    { uiArea: "Invitationer og adgangskoder", tools: ["create_invitation", "list_invitations", "revoke_invitation", "create_access_code", "list_access_codes", "revoke_access_code"] },
+    { uiArea: "MCP-tokens og audit", tools: ["create_service_token", "list_service_tokens", "revoke_service_token", "list_audit_events"] },
+    { uiArea: "Surveys og review-eksport", tools: ["list_active_surveys", "get_survey", "get_my_survey_response", "submit_survey_response", "list_surveys", "create_survey", "update_survey_draft", "publish_survey", "close_survey", "list_survey_responses", "export_review_bundle"] },
+  ]),
+});
 
 const outputKeysByName = Object.freeze({
   list_books: ["items"], get_book: ["book", "session"], create_book: ["book"], create_book_upload: ["upload"],
@@ -122,7 +137,7 @@ const authorizationDetails = Object.freeze({
   reset_user_password: { requiresInstanceAdmin: true },
   create_invitation: { conditional: "Den tildelte rolle må ikke overstige opretterens egne rettigheder i bogen." },
   create_access_code: { conditional: "Den tildelte rolle må ikke overstige opretterens egne rettigheder i bogen." },
-  create_service_token: { conditional: "Et instanceAdmin-token kræver instansadministrator. Boggrants må ikke overstige opretterens egne rettigheder." },
+  create_service_token: { conditional: "Et instanceAdmin-token kræver instansadministrator, men ingen eksisterende bog. Scoped boggrants må ikke overstige opretterens egne rettigheder." },
   list_service_tokens: { conditional: "Uden bookId kan kun en instansadministrator se alle tokens; med bookId kræves tokens:manage for bogen." },
   revoke_service_token: { conditional: "En instansadministrator kan tilbagekalde globalt. Ellers kræves bookId og tokens:manage i netop den bog." },
   list_audit_events: { conditional: "Uden bookId bruges installationens default-bog; angiv altid bookId medmindre tokenet er bevidst scoped til default-bogen." },

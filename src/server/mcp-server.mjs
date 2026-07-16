@@ -3,7 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as z from "zod/v4";
 
 import { createOperationalLogger } from "./operational-logger.mjs";
-import { MCP_TOOL_CONTRACTS, mcpToolError } from "./mcp-tool-contracts.mjs";
+import { ADMIN_UI_MCP_PARITY, MCP_TOOL_CONTRACTS, mcpToolError } from "./mcp-tool-contracts.mjs";
 import {
   MCP_TOOL_OUTPUT_SCHEMAS,
   annotationIdSchema,
@@ -16,7 +16,7 @@ import {
 } from "./mcp-contract-schemas.mjs";
 import { PERMISSIONS } from "./access-policy.mjs";
 
-export { MCP_TOOL_CONTRACTS } from "./mcp-tool-contracts.mjs";
+export { ADMIN_UI_MCP_PARITY, MCP_TOOL_CONTRACTS } from "./mcp-tool-contracts.mjs";
 
 const silentLogger = createOperationalLogger({ level: "silent" });
 const bundleContractDocument = new URL("../../docs/book-bundle.md", import.meta.url);
@@ -224,6 +224,16 @@ function registerLibraryResources(server, adapter) {
       mimeType: "application/json",
     },
     async (uri) => textResource(uri, { schemaVersion: 1, tools: MCP_TOOL_CONTRACTS }),
+  );
+  server.registerResource(
+    "admin-ui-mcp-parity",
+    "pba://contracts/admin-ui-mcp-parity/v1",
+    {
+      title: "Admin UI to MCP parity contract V1",
+      description: "Machine-readable guarantee and complete mapping from persistent UI capabilities to MCP tools.",
+      mimeType: "application/json",
+    },
+    async (uri) => textResource(uri, ADMIN_UI_MCP_PARITY),
   );
   server.registerResource(
     "survey-schema",
@@ -681,7 +691,7 @@ function registerAdministrationTools(server, adapter) {
   };
   server.registerTool("create_service_token", {
     title: "Create service token",
-    description: "Create a scoped, expiring token with optional grants for one or more books. Plaintext is returned once.",
+    description: "Create an expiring token. An instance-administrator token needs no existing book and can bootstrap an empty installation; scoped tokens require explicit book grants. Plaintext is returned once.",
     inputSchema: z.union([
       z.object({
         ...serviceTokenIdentityInput,

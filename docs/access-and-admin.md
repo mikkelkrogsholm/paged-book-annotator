@@ -87,7 +87,9 @@ kan aldrig delegere permissions, vedkommende ikke selv har.
 Admin UI'et kan give et token samme permissions i én eller flere valgte bøger.
 Et særskilt instansadministrator-token har alle rettigheder og kan blandt andet
 oprette brugere og bøger; kun lokal ejer eller en `instance_admin` kan udstede
-det.
+det. Tokenet kan oprettes, før der findes en aktiv bog, så en agent kan bootstrappe
+en tom installation og derefter oprette, uploade, validere og publicere den første
+bog gennem MCP-workflowet.
 
 Offentlige annotationer uden login tilskrives et pseudonymt gæste-id med 30 dages
 cookielevetid; en gæst bør oprette en konto, hvis feedback skal kunne eksporteres
