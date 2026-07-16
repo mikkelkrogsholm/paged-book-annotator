@@ -61,6 +61,7 @@ test("collaboration credentials expire or revoke and progress stays anchored", a
 
     assert.throws(() => repository.setGlobalRole(admin.id, "user"), /sidste aktive administrator/);
     assert.throws(() => repository.setUserStatus(admin.id, "disabled"), /sidste aktive administrator/);
+    assert.deepEqual(repository.readingPreference(reviewer.id), { trackingEnabled: true, updatedAt: null });
     repository.saveProgress(reviewer.id, { anchorId: "chapter-1.p-1", pageNumber: 1, percent: 10, buildId: "build-a" });
     repository.saveProgress(reviewer.id, { anchorId: "chapter-1.p-1", pageNumber: 2, percent: 20, buildId: "build-b" });
     repository.saveProgress(reviewer.id, { anchorId: "chapter-1.p-2", pageNumber: 3, percent: 30, buildId: "build-b" });

@@ -37,7 +37,9 @@ Serveren validerer kombinationen ved opstart. Eksempel:
 `annotationView` kan være `none`, `own`, `reviewGroup` eller `public`.
 `progressTracking` kan være `off`, `resume` eller `analytics`; både `resume`
 og `analytics` gemmer seneste stabile anker og besøgte ankre, mens betegnelsen
-gør formålet eksplicit i konfigurationen.
+gør formålet eksplicit i konfigurationen. For en ny, navngiven bruger er
+læseprogression slået til som standard. Brugeren kan slå den fra i læseren;
+det sletter den gemte progression og stopper nye progressionswrites.
 
 `registration` kan være `disabled`, `closed`, `open`, `inviteOnly` eller
 `code`. Invitationer er bundet til e-mail og bog; adgangskoder kan have udløb
