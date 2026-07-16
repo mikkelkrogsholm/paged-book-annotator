@@ -499,7 +499,9 @@ async function loadBook(bookId) {
       featureApi(can("audit:read"), path("audit"), { events: [] }, controller.signal, "Auditlog"),
       featureApi(can("surveys:manage"), path("surveys"), { surveys: [] }, controller.signal, "Surveys"),
       featureApi(can("surveys:responses:read"), path("survey-responses"), { responses: [] }, controller.signal, "Surveybesvarelser"),
-      featureApi(can("surveys:manage"), path("outline"), { items: [] }, controller.signal, "Bogankre"),
+      // A draft book has no document to derive anchors from yet. Avoid a noisy
+      // 503 in the browser until its first validated revision is published.
+      featureApi(can("surveys:manage") && Boolean(state.book.activeRevisionId), path("outline"), { items: [] }, controller.signal, "Bogankre"),
     ]);
     if (generation !== state.loadGeneration) return;
     if (!document.querySelector("#sharing").hidden) renderAccess(bookDetails.access ?? state.book.access ?? { preset: "privateReview", registration: "inviteOnly" });

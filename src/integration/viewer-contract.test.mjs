@@ -84,6 +84,7 @@ test("an empty managed library remains an interactive authentication state", asy
   assert.match(admin, /if \(!hasAdminAccess\(\)\)/);
   assert.match(admin, /selectActiveBookId\(state\.books, requested\)/);
   assert.doesNotMatch(admin, /state\.books\[0\]\?\.id/);
+  assert.match(admin, /can\("surveys:manage"\) && Boolean\(state\.book\.activeRevisionId\).*path\("outline"\)/);
 });
 
 test("destructive and publishing actions use an accessible application confirmation", async () => {
