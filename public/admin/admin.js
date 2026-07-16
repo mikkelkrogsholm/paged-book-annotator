@@ -1,4 +1,5 @@
 import { confirmUiAction } from "../ui-state.js";
+import { selectActiveBookId } from "./book-selection.js";
 
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -171,16 +172,20 @@ function ignoreAbort(error) {
 }
 
 function renderBooks() {
-  document.querySelector("#bookSelector").innerHTML = state.books.map((book) => option(book.id, state.bookId, `${book.title ?? book.id} · ${statusLabels[book.status] ?? book.status ?? "Kladde"}`)).join("");
+  const activeBooks = state.books.filter((book) => book.status !== "archived");
+  document.querySelector("#bookSelector").innerHTML = activeBooks.length
+    ? activeBooks.map((book) => option(book.id, state.bookId, `${book.title ?? book.id} · ${statusLabels[book.status] ?? book.status ?? "Kladde"}`)).join("")
+    : '<option value="" selected disabled>Ingen aktive bøger</option>';
   document.querySelector("#bookGrid").innerHTML = state.books.map((book) => {
     const active = book.id === state.bookId ? " active" : "";
     const revision = book.activeRevisionId ? `Aktiv revision ${book.activeRevisionId}` : "Intet publiceret bundle";
     const archive = book.status !== "archived" && book.id === state.bookId && can("books:settings") ? '<button class="quiet-danger" data-action="archive-book">Arkivér</button>' : "";
+    const select = book.status !== "archived" ? '<button class="secondary" data-action="select-book">Administrér</button>' : "";
     return `<article class="book-card${active}" data-book-id="${escapeHtml(book.id)}">
       <span>${escapeHtml(statusLabels[book.status] ?? book.status ?? "Kladde")}</span>
       <h3>${escapeHtml(book.title ?? book.id)}</h3><p>${escapeHtml(book.subtitle ?? revision)}</p>
       <small>${escapeHtml(revision)}</small><div class="row-actions">
-        <button class="secondary" data-action="select-book">Administrér</button>${archive}
+        ${select}${archive}
       </div>
     </article>`;
   }).join("") || '<p class="empty-library">Biblioteket er tomt. Opret den første bog ovenfor.</p>';
@@ -432,11 +437,20 @@ async function refreshLibrary(preferredBookId) {
   const payload = await api("/api/admin/books");
   state.books = list(payload, "books");
   const requested = preferredBookId ?? new URL(location.href).searchParams.get("book");
-  state.bookId = state.books.some((book) => book.id === requested) ? requested : state.books.find((book) => book.status !== "archived")?.id ?? state.books[0]?.id ?? null;
+  state.bookId = selectActiveBookId(state.books, requested);
   state.book = state.books.find((book) => book.id === state.bookId) ?? null;
   renderBooks();
   document.querySelector("#bookWorkspace").hidden = !state.bookId;
   if (state.bookId) await loadBook(state.bookId);
+  else {
+    const url = new URL(location.href);
+    url.searchParams.delete("book");
+    history.replaceState(null, "", url);
+    document.querySelector("#pageTitle").textContent = "Bogbibliotek";
+    document.querySelector("#bookTitle").textContent = "Bogbibliotek";
+    document.querySelector("#bookMark").textContent = "PB";
+    document.querySelector("#readerLink").href = "/";
+  }
 }
 
 async function loadBook(bookId) {
