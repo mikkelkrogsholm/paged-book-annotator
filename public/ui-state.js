@@ -30,14 +30,32 @@ export function showUiToast(message, { error = false, duration = 3_200 } = {}) {
   }, duration);
 }
 
-export function confirmUiAction(message, { dialog = globalThis.document?.querySelector("#confirmationDialog") } = {}) {
+export function confirmUiAction(message, {
+  dialog = globalThis.document?.querySelector("#confirmationDialog"),
+  suspendedDialog = globalThis.document?.querySelector("dialog[open]:not(#confirmationDialog)"),
+} = {}) {
   if (!dialog || dialog.open) return Promise.resolve(false);
   const messageNode = dialog.querySelector("[data-confirmation-message]");
   if (!messageNode) return Promise.resolve(false);
   messageNode.textContent = message;
   dialog.returnValue = "";
   return new Promise((resolve) => {
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
-    dialog.showModal();
+    const restoreSuspendedDialog = () => {
+      if (suspendedDialog && suspendedDialog !== dialog && !suspendedDialog.open) suspendedDialog.showModal();
+    };
+    const finish = () => {
+      const confirmed = dialog.returnValue === "confirm";
+      if (!confirmed) restoreSuspendedDialog();
+      resolve(confirmed);
+    };
+    dialog.addEventListener("close", finish, { once: true });
+    try {
+      if (suspendedDialog && suspendedDialog !== dialog) suspendedDialog.close();
+      dialog.showModal();
+    } catch {
+      dialog.removeEventListener("close", finish);
+      restoreSuspendedDialog();
+      resolve(false);
+    }
   });
 }

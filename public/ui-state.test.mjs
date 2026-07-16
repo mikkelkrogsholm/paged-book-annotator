@@ -43,3 +43,21 @@ test("application confirmation resolves true only for the explicit confirm actio
 test("application confirmation fails closed without a usable dialog", async () => {
   assert.equal(await confirmUiAction("Slet?", { dialog: null }), false);
 });
+
+test("application confirmation suspends a parent modal and restores it only after cancellation", async () => {
+  const parent = new FakeDialog();
+  parent.showModal();
+  const cancelledDialog = new FakeDialog();
+  const cancelled = confirmUiAction("Slet konto?", { dialog: cancelledDialog, suspendedDialog: parent });
+  assert.equal(parent.open, false);
+  assert.equal(cancelledDialog.open, true);
+  cancelledDialog.close("cancel");
+  assert.equal(await cancelled, false);
+  assert.equal(parent.open, true);
+
+  const confirmedDialog = new FakeDialog();
+  const confirmed = confirmUiAction("Slet konto?", { dialog: confirmedDialog, suspendedDialog: parent });
+  confirmedDialog.close("confirm");
+  assert.equal(await confirmed, true);
+  assert.equal(parent.open, false);
+});
